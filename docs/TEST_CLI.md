@@ -59,6 +59,24 @@ Show active layer:
 cargo run --bin kicad-ipc-cli -- active-layer
 ```
 
+Show visible layers:
+
+```bash
+cargo run --bin kicad-ipc-cli -- visible-layers
+```
+
+Show board origin (grid origin by default):
+
+```bash
+cargo run --bin kicad-ipc-cli -- board-origin
+```
+
+Show drill origin:
+
+```bash
+cargo run --bin kicad-ipc-cli -- board-origin --type drill
+```
+
 Get current project path (derived from open PCB docs):
 
 ```bash

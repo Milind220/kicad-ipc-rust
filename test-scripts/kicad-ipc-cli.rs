@@ -2,7 +2,7 @@ use std::process::ExitCode;
 use std::str::FromStr;
 use std::time::Duration;
 
-use kicad_ipc::{ClientBuilder, DocumentType, KiCadError};
+use kicad_ipc::{BoardOriginKind, ClientBuilder, DocumentType, KiCadError};
 
 #[derive(Debug)]
 struct CliConfig {
@@ -21,6 +21,8 @@ enum Command {
     Nets,
     EnabledLayers,
     ActiveLayer,
+    VisibleLayers,
+    BoardOrigin { kind: BoardOriginKind },
     Smoke,
     Help,
 }
@@ -139,6 +141,23 @@ async fn run() -> Result<(), KiCadError> {
                 layer.id, layer.name
             );
         }
+        Command::VisibleLayers => {
+            let layers = client.get_visible_layers().await?;
+            if layers.is_empty() {
+                println!("no visible layers returned");
+            } else {
+                for layer in layers {
+                    println!("layer_id={} layer_name={}", layer.id, layer.name);
+                }
+            }
+        }
+        Command::BoardOrigin { kind } => {
+            let origin = client.get_board_origin(kind).await?;
+            println!(
+                "origin_kind={} x_nm={} y_nm={}",
+                kind, origin.x_nm, origin.y_nm
+            );
+        }
         Command::Smoke => {
             client.ping().await?;
             let version = client.get_version().await?;
@@ -208,6 +227,24 @@ fn parse_args() -> Result<(CliConfig, Command), KiCadError> {
         "nets" => Command::Nets,
         "enabled-layers" => Command::EnabledLayers,
         "active-layer" => Command::ActiveLayer,
+        "visible-layers" => Command::VisibleLayers,
+        "board-origin" => {
+            let mut kind = BoardOriginKind::Grid;
+            let mut i = 1;
+            while i < args.len() {
+                if args[i] == "--type" {
+                    let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                        reason: "missing value for board-origin --type".to_string(),
+                    })?;
+                    kind = BoardOriginKind::from_str(value)
+                        .map_err(|err| KiCadError::Config { reason: err })?;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+            }
+            Command::BoardOrigin { kind }
+        }
         "smoke" => Command::Smoke,
         "open-docs" => {
             let mut document_type = DocumentType::Pcb;
@@ -246,6 +283,6 @@ fn default_config() -> CliConfig {
 
 fn print_help() {
     println!(
-        "kicad-ipc-cli\n\nUSAGE:\n  cargo run --bin kicad-ipc-cli -- [--socket URI] [--token TOKEN] [--timeout-ms N] <command> [command options]\n\nCOMMANDS:\n  ping                         Check IPC connectivity\n  version                      Fetch KiCad version\n  open-docs [--type <type>]    List open docs (default type: pcb)\n  project-path                 Get current project path from open PCB docs\n  board-open                   Exit non-zero if no PCB doc is open\n  nets                         List board nets (requires one open PCB)\n  enabled-layers               List enabled board layers\n  active-layer                 Show active board layer\n  smoke                        ping + version + board-open summary\n  help                         Show help\n\nTYPES:\n  schematic | symbol | pcb | footprint | drawing-sheet | project\n"
+        "kicad-ipc-cli\n\nUSAGE:\n  cargo run --bin kicad-ipc-cli -- [--socket URI] [--token TOKEN] [--timeout-ms N] <command> [command options]\n\nCOMMANDS:\n  ping                         Check IPC connectivity\n  version                      Fetch KiCad version\n  open-docs [--type <type>]    List open docs (default type: pcb)\n  project-path                 Get current project path from open PCB docs\n  board-open                   Exit non-zero if no PCB doc is open\n  nets                         List board nets (requires one open PCB)\n  enabled-layers               List enabled board layers\n  active-layer                 Show active board layer\n  visible-layers               Show currently visible board layers\n  board-origin [--type <t>]    Show board origin (`grid` default, or `drill`)\n  smoke                        ping + version + board-open summary\n  help                         Show help\n\nTYPES:\n  schematic | symbol | pcb | footprint | drawing-sheet | project\n"
     );
 }

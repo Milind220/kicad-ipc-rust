@@ -5,7 +5,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::envelope;
 use crate::error::KiCadError;
-use crate::model::board::{BoardEnabledLayers, BoardLayerInfo, BoardNet};
+use crate::model::board::{
+    BoardEnabledLayers, BoardLayerInfo, BoardNet, BoardOriginKind, Vector2Nm,
+};
 use crate::model::common::{DocumentSpecifier, DocumentType, ProjectInfo, VersionInfo};
 use crate::proto::kiapi::board::commands as board_commands;
 use crate::proto::kiapi::board::types as board_types;
@@ -22,12 +24,16 @@ const CMD_GET_OPEN_DOCUMENTS: &str = "kiapi.common.commands.GetOpenDocuments";
 const CMD_GET_NETS: &str = "kiapi.board.commands.GetNets";
 const CMD_GET_BOARD_ENABLED_LAYERS: &str = "kiapi.board.commands.GetBoardEnabledLayers";
 const CMD_GET_ACTIVE_LAYER: &str = "kiapi.board.commands.GetActiveLayer";
+const CMD_GET_VISIBLE_LAYERS: &str = "kiapi.board.commands.GetVisibleLayers";
+const CMD_GET_BOARD_ORIGIN: &str = "kiapi.board.commands.GetBoardOrigin";
 
 const RES_GET_VERSION: &str = "kiapi.common.commands.GetVersionResponse";
 const RES_GET_OPEN_DOCUMENTS: &str = "kiapi.common.commands.GetOpenDocumentsResponse";
 const RES_GET_NETS: &str = "kiapi.board.commands.NetsResponse";
 const RES_GET_BOARD_ENABLED_LAYERS: &str = "kiapi.board.commands.BoardEnabledLayersResponse";
 const RES_BOARD_LAYER_RESPONSE: &str = "kiapi.board.commands.BoardLayerResponse";
+const RES_BOARD_LAYERS: &str = "kiapi.board.commands.BoardLayers";
+const RES_VECTOR2: &str = "kiapi.common.types.Vector2";
 
 #[derive(Clone, Debug)]
 pub struct KiCadClient {
@@ -251,6 +257,38 @@ impl KiCadClient {
         Ok(layer_to_model(payload.layer))
     }
 
+    pub async fn get_visible_layers(&self) -> Result<Vec<BoardLayerInfo>, KiCadError> {
+        let board = self.current_board_document_proto().await?;
+        let command = board_commands::GetVisibleLayers { board: Some(board) };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_GET_VISIBLE_LAYERS))
+            .await?;
+
+        let payload: board_commands::BoardLayers =
+            envelope::unpack_any(&response, RES_BOARD_LAYERS)?;
+
+        Ok(payload.layers.into_iter().map(layer_to_model).collect())
+    }
+
+    pub async fn get_board_origin(&self, kind: BoardOriginKind) -> Result<Vector2Nm, KiCadError> {
+        let board = self.current_board_document_proto().await?;
+        let command = board_commands::GetBoardOrigin {
+            board: Some(board),
+            r#type: board_origin_kind_to_proto(kind),
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_GET_BOARD_ORIGIN))
+            .await?;
+
+        let payload: common_types::Vector2 = envelope::unpack_any(&response, RES_VECTOR2)?;
+        Ok(Vector2Nm {
+            x_nm: payload.x_nm,
+            y_nm: payload.y_nm,
+        })
+    }
+
     async fn send_command(
         &self,
         command: prost_types::Any,
@@ -355,6 +393,13 @@ fn layer_to_model(layer_id: i32) -> BoardLayerInfo {
         .unwrap_or_else(|_| format!("UNKNOWN_LAYER({layer_id})"));
 
     BoardLayerInfo { id: layer_id, name }
+}
+
+fn board_origin_kind_to_proto(kind: BoardOriginKind) -> i32 {
+    match kind {
+        BoardOriginKind::Grid => board_commands::BoardOriginType::BotGrid as i32,
+        BoardOriginKind::Drill => board_commands::BoardOriginType::BotDrill as i32,
+    }
 }
 
 fn select_single_board_document(
