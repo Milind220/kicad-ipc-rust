@@ -1,21 +1,23 @@
 //! Async-first Rust bindings for the KiCad IPC API.
 //!
-//! This crate is intentionally layered:
+//! Layering:
 //! - transport
 //! - envelope
 //! - command builders
 //! - high-level client
 
 pub mod client;
+pub mod commands;
 pub mod envelope;
 pub mod error;
 pub mod model;
 pub mod transport;
 
-pub mod commands;
-
 #[cfg(feature = "blocking")]
 pub mod blocking;
 
+pub(crate) mod proto;
+
 pub use crate::client::{ClientBuilder, KiCadClient};
 pub use crate::error::KiCadError;
+pub use crate::model::common::{DocumentSpecifier, DocumentType, VersionInfo};

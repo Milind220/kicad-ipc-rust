@@ -23,3 +23,8 @@ tracing = { version = "0.1.41", optional = true }
 
 [build-dependencies]
 prost-build = "0.14.1"
+
+[[bin]]
+name = "kicad-ipc-cli"
+path = "test-scripts/kicad-ipc-cli.rs"
+required-features = ["async"]

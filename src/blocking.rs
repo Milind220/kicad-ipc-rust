@@ -11,7 +11,7 @@ impl KiCadClientBlocking {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_time()
             .build()
-            .map_err(|err| KiCadError::Connection(err.to_string()))?;
+            .map_err(|err| KiCadError::RuntimeJoin(err.to_string()))?;
         let inner = runtime.block_on(KiCadClient::connect())?;
         Ok(Self { inner })
     }
