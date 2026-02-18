@@ -18,6 +18,9 @@ enum Command {
     OpenDocs { document_type: DocumentType },
     ProjectPath,
     BoardOpen,
+    Nets,
+    EnabledLayers,
+    ActiveLayer,
     Smoke,
     Help,
 }
@@ -28,7 +31,10 @@ async fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("error: {err}");
-            if matches!(err, KiCadError::BoardNotOpen | KiCadError::SocketUnavailable { .. }) {
+            if matches!(
+                err,
+                KiCadError::BoardNotOpen | KiCadError::SocketUnavailable { .. }
+            ) {
                 eprintln!(
                     "hint: launch KiCad, open a project, and open a PCB editor window before rerunning this command."
                 );
@@ -109,6 +115,30 @@ async fn run() -> Result<(), KiCadError> {
                 return Err(KiCadError::BoardNotOpen);
             }
         }
+        Command::Nets => {
+            let nets = client.get_nets().await?;
+            if nets.is_empty() {
+                println!("no nets returned");
+            } else {
+                for net in nets {
+                    println!("code={} name={}", net.code, net.name);
+                }
+            }
+        }
+        Command::EnabledLayers => {
+            let enabled = client.get_board_enabled_layers().await?;
+            println!("copper_layer_count={}", enabled.copper_layer_count);
+            for layer in enabled.layers {
+                println!("layer_id={} layer_name={}", layer.id, layer.name);
+            }
+        }
+        Command::ActiveLayer => {
+            let layer = client.get_active_layer().await?;
+            println!(
+                "active_layer_id={} active_layer_name={}",
+                layer.id, layer.name
+            );
+        }
         Command::Smoke => {
             client.ping().await?;
             let version = client.get_version().await?;
@@ -175,6 +205,9 @@ fn parse_args() -> Result<(CliConfig, Command), KiCadError> {
         "version" => Command::Version,
         "project-path" => Command::ProjectPath,
         "board-open" => Command::BoardOpen,
+        "nets" => Command::Nets,
+        "enabled-layers" => Command::EnabledLayers,
+        "active-layer" => Command::ActiveLayer,
         "smoke" => Command::Smoke,
         "open-docs" => {
             let mut document_type = DocumentType::Pcb;
@@ -184,10 +217,8 @@ fn parse_args() -> Result<(CliConfig, Command), KiCadError> {
                     let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
                         reason: "missing value for open-docs --type".to_string(),
                     })?;
-                    document_type =
-                        DocumentType::from_str(value).map_err(|err| KiCadError::Config {
-                            reason: err,
-                        })?;
+                    document_type = DocumentType::from_str(value)
+                        .map_err(|err| KiCadError::Config { reason: err })?;
                     i += 2;
                     continue;
                 }
@@ -215,6 +246,6 @@ fn default_config() -> CliConfig {
 
 fn print_help() {
     println!(
-        "kicad-ipc-cli\n\nUSAGE:\n  cargo run --bin kicad-ipc-cli -- [--socket URI] [--token TOKEN] [--timeout-ms N] <command> [command options]\n\nCOMMANDS:\n  ping                         Check IPC connectivity\n  version                      Fetch KiCad version\n  open-docs [--type <type>]    List open docs (default type: pcb)\n  project-path                 Get current project path from open PCB docs\n  board-open                   Exit non-zero if no PCB doc is open\n  smoke                        ping + version + board-open summary\n  help                         Show help\n\nTYPES:\n  schematic | symbol | pcb | footprint | drawing-sheet | project\n"
+        "kicad-ipc-cli\n\nUSAGE:\n  cargo run --bin kicad-ipc-cli -- [--socket URI] [--token TOKEN] [--timeout-ms N] <command> [command options]\n\nCOMMANDS:\n  ping                         Check IPC connectivity\n  version                      Fetch KiCad version\n  open-docs [--type <type>]    List open docs (default type: pcb)\n  project-path                 Get current project path from open PCB docs\n  board-open                   Exit non-zero if no PCB doc is open\n  nets                         List board nets (requires one open PCB)\n  enabled-layers               List enabled board layers\n  active-layer                 Show active board layer\n  smoke                        ping + version + board-open summary\n  help                         Show help\n\nTYPES:\n  schematic | symbol | pcb | footprint | drawing-sheet | project\n"
     );
 }

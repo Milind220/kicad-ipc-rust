@@ -20,4 +20,5 @@ pub(crate) mod proto;
 
 pub use crate::client::{ClientBuilder, KiCadClient};
 pub use crate::error::KiCadError;
+pub use crate::model::board::{BoardEnabledLayers, BoardLayerInfo, BoardNet};
 pub use crate::model::common::{DocumentSpecifier, DocumentType, VersionInfo};

@@ -5,7 +5,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::envelope;
 use crate::error::KiCadError;
+use crate::model::board::{BoardEnabledLayers, BoardLayerInfo, BoardNet};
 use crate::model::common::{DocumentSpecifier, DocumentType, ProjectInfo, VersionInfo};
+use crate::proto::kiapi::board::commands as board_commands;
+use crate::proto::kiapi::board::types as board_types;
 use crate::proto::kiapi::common::commands as common_commands;
 use crate::proto::kiapi::common::types as common_types;
 use crate::transport::Transport;
@@ -16,9 +19,15 @@ const KICAD_API_TOKEN_ENV: &str = "KICAD_API_TOKEN";
 const CMD_PING: &str = "kiapi.common.commands.Ping";
 const CMD_GET_VERSION: &str = "kiapi.common.commands.GetVersion";
 const CMD_GET_OPEN_DOCUMENTS: &str = "kiapi.common.commands.GetOpenDocuments";
+const CMD_GET_NETS: &str = "kiapi.board.commands.GetNets";
+const CMD_GET_BOARD_ENABLED_LAYERS: &str = "kiapi.board.commands.GetBoardEnabledLayers";
+const CMD_GET_ACTIVE_LAYER: &str = "kiapi.board.commands.GetActiveLayer";
 
 const RES_GET_VERSION: &str = "kiapi.common.commands.GetVersionResponse";
 const RES_GET_OPEN_DOCUMENTS: &str = "kiapi.common.commands.GetOpenDocumentsResponse";
+const RES_GET_NETS: &str = "kiapi.board.commands.NetsResponse";
+const RES_GET_BOARD_ENABLED_LAYERS: &str = "kiapi.board.commands.BoardEnabledLayersResponse";
+const RES_BOARD_LAYER_RESPONSE: &str = "kiapi.board.commands.BoardLayerResponse";
 
 #[derive(Clone, Debug)]
 pub struct KiCadClient {
@@ -94,10 +103,7 @@ impl ClientBuilder {
             .or_else(|| std::env::var(KICAD_API_TOKEN_ENV).ok())
             .unwrap_or_default();
 
-        let client_name = self
-            .config
-            .client_name
-            .unwrap_or_else(default_client_name);
+        let client_name = self.config.client_name.unwrap_or_else(default_client_name);
 
         Ok(KiCadClient {
             inner: Arc::new(ClientInner {
@@ -147,11 +153,9 @@ impl KiCadClient {
         let payload: common_commands::GetVersionResponse =
             envelope::unpack_any(&response, RES_GET_VERSION)?;
 
-        let version = payload
-            .version
-            .ok_or_else(|| KiCadError::MissingPayload {
-                expected_type_url: "kiapi.common.types.KiCadVersion".to_string(),
-            })?;
+        let version = payload.version.ok_or_else(|| KiCadError::MissingPayload {
+            expected_type_url: "kiapi.common.types.KiCadVersion".to_string(),
+        })?;
 
         Ok(VersionInfo {
             major: version.major,
@@ -193,6 +197,60 @@ impl KiCadClient {
         Ok(!docs.is_empty())
     }
 
+    pub async fn get_nets(&self) -> Result<Vec<BoardNet>, KiCadError> {
+        let board = self.current_board_document_proto().await?;
+        let command = board_commands::GetNets {
+            board: Some(board),
+            netclass_filter: Vec::new(),
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_GET_NETS))
+            .await?;
+
+        let payload: board_commands::NetsResponse = envelope::unpack_any(&response, RES_GET_NETS)?;
+
+        Ok(payload
+            .nets
+            .into_iter()
+            .map(|net| BoardNet {
+                code: net.code.map_or(0, |code| code.value),
+                name: net.name,
+            })
+            .collect())
+    }
+
+    pub async fn get_board_enabled_layers(&self) -> Result<BoardEnabledLayers, KiCadError> {
+        let board = self.current_board_document_proto().await?;
+        let command = board_commands::GetBoardEnabledLayers { board: Some(board) };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_GET_BOARD_ENABLED_LAYERS))
+            .await?;
+
+        let payload: board_commands::BoardEnabledLayersResponse =
+            envelope::unpack_any(&response, RES_GET_BOARD_ENABLED_LAYERS)?;
+
+        Ok(BoardEnabledLayers {
+            copper_layer_count: payload.copper_layer_count,
+            layers: payload.layers.into_iter().map(layer_to_model).collect(),
+        })
+    }
+
+    pub async fn get_active_layer(&self) -> Result<BoardLayerInfo, KiCadError> {
+        let board = self.current_board_document_proto().await?;
+        let command = board_commands::GetActiveLayer { board: Some(board) };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_GET_ACTIVE_LAYER))
+            .await?;
+
+        let payload: board_commands::BoardLayerResponse =
+            envelope::unpack_any(&response, RES_BOARD_LAYER_RESPONSE)?;
+
+        Ok(layer_to_model(payload.layer))
+    }
+
     async fn send_command(
         &self,
         command: prost_types::Any,
@@ -228,6 +286,14 @@ impl KiCadClient {
 
         Ok(response)
     }
+
+    async fn current_board_document_proto(
+        &self,
+    ) -> Result<common_types::DocumentSpecifier, KiCadError> {
+        let docs = self.get_open_documents(DocumentType::Pcb).await?;
+        let selected = select_single_board_document(&docs)?;
+        Ok(model_document_to_proto(selected))
+    }
 }
 
 fn map_document_specifier(source: common_types::DocumentSpecifier) -> Option<DocumentSpecifier> {
@@ -259,6 +325,58 @@ fn map_document_specifier(source: common_types::DocumentSpecifier) -> Option<Doc
         board_filename,
         project: project_info,
     })
+}
+
+fn model_document_to_proto(document: &DocumentSpecifier) -> common_types::DocumentSpecifier {
+    let identifier = document.board_filename.as_ref().map(|filename| {
+        common_types::document_specifier::Identifier::BoardFilename(filename.clone())
+    });
+
+    let project = common_types::ProjectSpecifier {
+        name: document.project.name.clone().unwrap_or_default(),
+        path: document
+            .project
+            .path
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
+    };
+
+    common_types::DocumentSpecifier {
+        r#type: document.document_type.to_proto(),
+        project: Some(project),
+        identifier,
+    }
+}
+
+fn layer_to_model(layer_id: i32) -> BoardLayerInfo {
+    let name = board_types::BoardLayer::try_from(layer_id)
+        .map(|layer| layer.as_str_name().to_string())
+        .unwrap_or_else(|_| format!("UNKNOWN_LAYER({layer_id})"));
+
+    BoardLayerInfo { id: layer_id, name }
+}
+
+fn select_single_board_document(
+    docs: &[DocumentSpecifier],
+) -> Result<&DocumentSpecifier, KiCadError> {
+    if docs.is_empty() {
+        return Err(KiCadError::BoardNotOpen);
+    }
+
+    if docs.len() > 1 {
+        let boards = docs
+            .iter()
+            .map(|doc| {
+                doc.board_filename
+                    .clone()
+                    .unwrap_or_else(|| "<unknown>".to_string())
+            })
+            .collect();
+        return Err(KiCadError::AmbiguousBoardSelection { boards });
+    }
+
+    Ok(&docs[0])
 }
 
 fn select_single_project_path(docs: &[DocumentSpecifier]) -> Result<PathBuf, KiCadError> {
@@ -355,7 +473,10 @@ fn default_client_name() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_socket_uri, select_single_project_path};
+    use super::{
+        layer_to_model, model_document_to_proto, normalize_socket_uri,
+        select_single_board_document, select_single_project_path,
+    };
     use crate::error::KiCadError;
     use crate::model::common::{DocumentSpecifier, DocumentType, ProjectInfo};
     use std::path::PathBuf;
@@ -421,5 +542,69 @@ mod tests {
         let docs: Vec<DocumentSpecifier> = Vec::new();
         let result = select_single_project_path(&docs);
         assert!(matches!(result, Err(KiCadError::BoardNotOpen)));
+    }
+
+    #[test]
+    fn select_single_board_document_errors_on_multiple_open_boards() {
+        let docs = vec![
+            DocumentSpecifier {
+                document_type: DocumentType::Pcb,
+                board_filename: Some("a.kicad_pcb".to_string()),
+                project: ProjectInfo {
+                    name: Some("a".to_string()),
+                    path: Some(PathBuf::from("/tmp/a")),
+                },
+            },
+            DocumentSpecifier {
+                document_type: DocumentType::Pcb,
+                board_filename: Some("b.kicad_pcb".to_string()),
+                project: ProjectInfo {
+                    name: Some("b".to_string()),
+                    path: Some(PathBuf::from("/tmp/b")),
+                },
+            },
+        ];
+
+        let result = select_single_board_document(&docs);
+        assert!(matches!(
+            result,
+            Err(KiCadError::AmbiguousBoardSelection { .. })
+        ));
+    }
+
+    #[test]
+    fn layer_to_model_formats_unknown_id() {
+        let layer = layer_to_model(999);
+        assert_eq!(layer.name, "UNKNOWN_LAYER(999)");
+        assert_eq!(layer.id, 999);
+    }
+
+    #[test]
+    fn model_document_to_proto_carries_board_filename_and_project() {
+        let document = DocumentSpecifier {
+            document_type: DocumentType::Pcb,
+            board_filename: Some("demo.kicad_pcb".to_string()),
+            project: ProjectInfo {
+                name: Some("demo".to_string()),
+                path: Some(PathBuf::from("/tmp/demo")),
+            },
+        };
+
+        let proto = model_document_to_proto(&document);
+        assert_eq!(
+            proto.r#type,
+            crate::model::common::DocumentType::Pcb.to_proto()
+        );
+        let identifier = proto.identifier.expect("identifier should be present");
+        match identifier {
+            crate::proto::kiapi::common::types::document_specifier::Identifier::BoardFilename(
+                filename,
+            ) => assert_eq!(filename, "demo.kicad_pcb"),
+            other => panic!("unexpected identifier variant: {other:?}"),
+        }
+
+        let project = proto.project.expect("project should be present");
+        assert_eq!(project.name, "demo");
+        assert_eq!(project.path, "/tmp/demo");
     }
 }

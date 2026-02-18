@@ -2,9 +2,7 @@ use prost::Message;
 use prost_types::Any;
 
 use crate::error::KiCadError;
-use crate::proto::kiapi::common::{
-    ApiRequest, ApiRequestHeader, ApiResponse, ApiStatusCode,
-};
+use crate::proto::kiapi::common::{ApiRequest, ApiRequestHeader, ApiResponse, ApiStatusCode};
 
 pub(crate) fn type_url(type_name: &str) -> String {
     format!("type.googleapis.com/{type_name}")
@@ -36,8 +34,7 @@ pub(crate) fn unpack_any<T: Message + Default>(
         });
     }
 
-    T::decode(payload.value.as_slice())
-        .map_err(|err| KiCadError::ProtobufDecode(err.to_string()))
+    T::decode(payload.value.as_slice()).map_err(|err| KiCadError::ProtobufDecode(err.to_string()))
 }
 
 pub(crate) fn encode_request(
@@ -105,8 +102,8 @@ mod tests {
             message: None,
         };
 
-        let err = status_error(&response)
-            .expect("non-ok API status should map to KiCadError::ApiStatus");
+        let err =
+            status_error(&response).expect("non-ok API status should map to KiCadError::ApiStatus");
         let message = err.to_string();
         assert!(message.contains("AS_TOKEN_MISMATCH"));
     }

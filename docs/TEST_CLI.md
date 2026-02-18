@@ -41,6 +41,24 @@ Check board open:
 cargo run --bin kicad-ipc-cli -- board-open
 ```
 
+List nets:
+
+```bash
+cargo run --bin kicad-ipc-cli -- nets
+```
+
+List enabled board layers:
+
+```bash
+cargo run --bin kicad-ipc-cli -- enabled-layers
+```
+
+Show active layer:
+
+```bash
+cargo run --bin kicad-ipc-cli -- active-layer
+```
+
 Get current project path (derived from open PCB docs):
 
 ```bash

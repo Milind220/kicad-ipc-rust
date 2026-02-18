@@ -23,14 +23,16 @@ struct TransportRequest {
 impl Transport {
     pub(crate) fn connect(socket_uri: &str, timeout: Duration) -> Result<Self, KiCadError> {
         let socket = configured_socket(socket_uri, timeout)?;
-        let (request_tx, mut request_rx) = mpsc::channel::<TransportRequest>(TRANSPORT_QUEUE_CAPACITY);
+        let (request_tx, mut request_rx) =
+            mpsc::channel::<TransportRequest>(TRANSPORT_QUEUE_CAPACITY);
 
         let worker_name = format!("kicad-ipc-transport-{}", std::process::id());
         thread::Builder::new()
             .name(worker_name)
             .spawn(move || {
                 while let Some(request) = request_rx.blocking_recv() {
-                    let response = socket_roundtrip(&socket, request.request_bytes.as_slice(), timeout);
+                    let response =
+                        socket_roundtrip(&socket, request.request_bytes.as_slice(), timeout);
                     let _ = request.response_tx.send(response);
                 }
             })
@@ -77,10 +79,12 @@ fn configured_socket(socket_uri: &str, timeout: Duration) -> Result<Socket, KiCa
             reason: err.to_string(),
         })?;
 
-    socket.dial(socket_uri).map_err(|err| KiCadError::Connection {
-        socket_uri: socket_uri.to_string(),
-        reason: err.to_string(),
-    })?;
+    socket
+        .dial(socket_uri)
+        .map_err(|err| KiCadError::Connection {
+            socket_uri: socket_uri.to_string(),
+            reason: err.to_string(),
+        })?;
 
     Ok(socket)
 }

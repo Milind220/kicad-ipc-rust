@@ -54,4 +54,7 @@ pub enum KiCadError {
 
     #[error("multiple project paths found across open PCB docs: {paths:?}")]
     AmbiguousProjectPath { paths: Vec<String> },
+
+    #[error("multiple PCB documents are open; unable to choose one board context: {boards:?}")]
+    AmbiguousBoardSelection { boards: Vec<String> },
 }
