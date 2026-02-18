@@ -23,6 +23,7 @@ enum Command {
     ActiveLayer,
     VisibleLayers,
     BoardOrigin { kind: BoardOriginKind },
+    SelectionSummary,
     Smoke,
     Help,
 }
@@ -158,6 +159,13 @@ async fn run() -> Result<(), KiCadError> {
                 kind, origin.x_nm, origin.y_nm
             );
         }
+        Command::SelectionSummary => {
+            let summary = client.get_selection_summary().await?;
+            println!("selection_total={}", summary.total_items);
+            for entry in summary.type_url_counts {
+                println!("type_url={} count={}", entry.type_url, entry.count);
+            }
+        }
         Command::Smoke => {
             client.ping().await?;
             let version = client.get_version().await?;
@@ -245,6 +253,7 @@ fn parse_args() -> Result<(CliConfig, Command), KiCadError> {
             }
             Command::BoardOrigin { kind }
         }
+        "selection-summary" => Command::SelectionSummary,
         "smoke" => Command::Smoke,
         "open-docs" => {
             let mut document_type = DocumentType::Pcb;
@@ -283,6 +292,6 @@ fn default_config() -> CliConfig {
 
 fn print_help() {
     println!(
-        "kicad-ipc-cli\n\nUSAGE:\n  cargo run --bin kicad-ipc-cli -- [--socket URI] [--token TOKEN] [--timeout-ms N] <command> [command options]\n\nCOMMANDS:\n  ping                         Check IPC connectivity\n  version                      Fetch KiCad version\n  open-docs [--type <type>]    List open docs (default type: pcb)\n  project-path                 Get current project path from open PCB docs\n  board-open                   Exit non-zero if no PCB doc is open\n  nets                         List board nets (requires one open PCB)\n  enabled-layers               List enabled board layers\n  active-layer                 Show active board layer\n  visible-layers               Show currently visible board layers\n  board-origin [--type <t>]    Show board origin (`grid` default, or `drill`)\n  smoke                        ping + version + board-open summary\n  help                         Show help\n\nTYPES:\n  schematic | symbol | pcb | footprint | drawing-sheet | project\n"
+        "kicad-ipc-cli\n\nUSAGE:\n  cargo run --bin kicad-ipc-cli -- [--socket URI] [--token TOKEN] [--timeout-ms N] <command> [command options]\n\nCOMMANDS:\n  ping                         Check IPC connectivity\n  version                      Fetch KiCad version\n  open-docs [--type <type>]    List open docs (default type: pcb)\n  project-path                 Get current project path from open PCB docs\n  board-open                   Exit non-zero if no PCB doc is open\n  nets                         List board nets (requires one open PCB)\n  enabled-layers               List enabled board layers\n  active-layer                 Show active board layer\n  visible-layers               Show currently visible board layers\n  board-origin [--type <t>]    Show board origin (`grid` default, or `drill`)\n  selection-summary            Show current selection item type counts\n  smoke                        ping + version + board-open summary\n  help                         Show help\n\nTYPES:\n  schematic | symbol | pcb | footprint | drawing-sheet | project\n"
     );
 }

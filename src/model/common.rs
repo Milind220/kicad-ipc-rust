@@ -92,3 +92,15 @@ pub struct DocumentSpecifier {
     pub board_filename: Option<String>,
     pub project: ProjectInfo,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SelectionTypeCount {
+    pub type_url: String,
+    pub count: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SelectionSummary {
+    pub total_items: usize,
+    pub type_url_counts: Vec<SelectionTypeCount>,
+}

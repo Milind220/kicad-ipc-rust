@@ -77,6 +77,12 @@ Show drill origin:
 cargo run --bin kicad-ipc-cli -- board-origin --type drill
 ```
 
+Show summary of current PCB selection by item type:
+
+```bash
+cargo run --bin kicad-ipc-cli -- selection-summary
+```
+
 Get current project path (derived from open PCB docs):
 
 ```bash

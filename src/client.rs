@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -8,7 +8,9 @@ use crate::error::KiCadError;
 use crate::model::board::{
     BoardEnabledLayers, BoardLayerInfo, BoardNet, BoardOriginKind, Vector2Nm,
 };
-use crate::model::common::{DocumentSpecifier, DocumentType, ProjectInfo, VersionInfo};
+use crate::model::common::{
+    DocumentSpecifier, DocumentType, ProjectInfo, SelectionSummary, SelectionTypeCount, VersionInfo,
+};
 use crate::proto::kiapi::board::commands as board_commands;
 use crate::proto::kiapi::board::types as board_types;
 use crate::proto::kiapi::common::commands as common_commands;
@@ -26,6 +28,7 @@ const CMD_GET_BOARD_ENABLED_LAYERS: &str = "kiapi.board.commands.GetBoardEnabled
 const CMD_GET_ACTIVE_LAYER: &str = "kiapi.board.commands.GetActiveLayer";
 const CMD_GET_VISIBLE_LAYERS: &str = "kiapi.board.commands.GetVisibleLayers";
 const CMD_GET_BOARD_ORIGIN: &str = "kiapi.board.commands.GetBoardOrigin";
+const CMD_GET_SELECTION: &str = "kiapi.common.commands.GetSelection";
 
 const RES_GET_VERSION: &str = "kiapi.common.commands.GetVersionResponse";
 const RES_GET_OPEN_DOCUMENTS: &str = "kiapi.common.commands.GetOpenDocumentsResponse";
@@ -34,6 +37,7 @@ const RES_GET_BOARD_ENABLED_LAYERS: &str = "kiapi.board.commands.BoardEnabledLay
 const RES_BOARD_LAYER_RESPONSE: &str = "kiapi.board.commands.BoardLayerResponse";
 const RES_BOARD_LAYERS: &str = "kiapi.board.commands.BoardLayers";
 const RES_VECTOR2: &str = "kiapi.common.types.Vector2";
+const RES_SELECTION_RESPONSE: &str = "kiapi.common.commands.SelectionResponse";
 
 #[derive(Clone, Debug)]
 pub struct KiCadClient {
@@ -289,6 +293,27 @@ impl KiCadClient {
         })
     }
 
+    pub async fn get_selection_summary(&self) -> Result<SelectionSummary, KiCadError> {
+        let document = self.current_board_document_proto().await?;
+        let command = common_commands::GetSelection {
+            header: Some(common_types::ItemHeader {
+                document: Some(document),
+                container: None,
+                field_mask: None,
+            }),
+            types: Vec::new(),
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_GET_SELECTION))
+            .await?;
+
+        let payload: common_commands::SelectionResponse =
+            envelope::unpack_any(&response, RES_SELECTION_RESPONSE)?;
+
+        Ok(summarize_selection(payload.items))
+    }
+
     async fn send_command(
         &self,
         command: prost_types::Any,
@@ -399,6 +424,23 @@ fn board_origin_kind_to_proto(kind: BoardOriginKind) -> i32 {
     match kind {
         BoardOriginKind::Grid => board_commands::BoardOriginType::BotGrid as i32,
         BoardOriginKind::Drill => board_commands::BoardOriginType::BotDrill as i32,
+    }
+}
+
+fn summarize_selection(items: Vec<prost_types::Any>) -> SelectionSummary {
+    let mut counts = BTreeMap::<String, usize>::new();
+
+    for item in &items {
+        let entry = counts.entry(item.type_url.clone()).or_insert(0);
+        *entry += 1;
+    }
+
+    SelectionSummary {
+        total_items: items.len(),
+        type_url_counts: counts
+            .into_iter()
+            .map(|(type_url, count)| SelectionTypeCount { type_url, count })
+            .collect(),
     }
 }
 
@@ -520,7 +562,7 @@ fn default_client_name() -> String {
 mod tests {
     use super::{
         layer_to_model, model_document_to_proto, normalize_socket_uri,
-        select_single_board_document, select_single_project_path,
+        select_single_board_document, select_single_project_path, summarize_selection,
     };
     use crate::error::KiCadError;
     use crate::model::common::{DocumentSpecifier, DocumentType, ProjectInfo};
@@ -651,5 +693,37 @@ mod tests {
         let project = proto.project.expect("project should be present");
         assert_eq!(project.name, "demo");
         assert_eq!(project.path, "/tmp/demo");
+    }
+
+    #[test]
+    fn summarize_selection_counts_payload_types() {
+        let items = vec![
+            prost_types::Any {
+                type_url: "type.googleapis.com/kiapi.board.types.Track".to_string(),
+                value: vec![1, 2, 3],
+            },
+            prost_types::Any {
+                type_url: "type.googleapis.com/kiapi.board.types.Track".to_string(),
+                value: vec![9],
+            },
+            prost_types::Any {
+                type_url: "type.googleapis.com/kiapi.board.types.Via".to_string(),
+                value: vec![7, 7],
+            },
+        ];
+
+        let summary = summarize_selection(items);
+        assert_eq!(summary.total_items, 3);
+        assert_eq!(summary.type_url_counts.len(), 2);
+        assert_eq!(summary.type_url_counts[0].count, 2);
+        assert_eq!(
+            summary.type_url_counts[0].type_url,
+            "type.googleapis.com/kiapi.board.types.Track"
+        );
+        assert_eq!(summary.type_url_counts[1].count, 1);
+        assert_eq!(
+            summary.type_url_counts[1].type_url,
+            "type.googleapis.com/kiapi.board.types.Via"
+        );
     }
 }

@@ -23,4 +23,6 @@ pub use crate::error::KiCadError;
 pub use crate::model::board::{
     BoardEnabledLayers, BoardLayerInfo, BoardNet, BoardOriginKind, Vector2Nm,
 };
-pub use crate::model::common::{DocumentSpecifier, DocumentType, VersionInfo};
+pub use crate::model::common::{
+    DocumentSpecifier, DocumentType, SelectionSummary, SelectionTypeCount, VersionInfo,
+};
