@@ -6,10 +6,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::envelope;
 use crate::error::KiCadError;
 use crate::model::board::{
-    BoardEnabledLayers, BoardLayerInfo, BoardNet, BoardOriginKind, Vector2Nm,
+    BoardEnabledLayers, BoardLayerInfo, BoardNet, BoardOriginKind, PadNetEntry, Vector2Nm,
 };
 use crate::model::common::{
-    DocumentSpecifier, DocumentType, ProjectInfo, SelectionSummary, SelectionTypeCount, VersionInfo,
+    DocumentSpecifier, DocumentType, ProjectInfo, SelectionItemDetail, SelectionSummary,
+    SelectionTypeCount, VersionInfo,
 };
 use crate::proto::kiapi::board::commands as board_commands;
 use crate::proto::kiapi::board::types as board_types;
@@ -29,6 +30,7 @@ const CMD_GET_ACTIVE_LAYER: &str = "kiapi.board.commands.GetActiveLayer";
 const CMD_GET_VISIBLE_LAYERS: &str = "kiapi.board.commands.GetVisibleLayers";
 const CMD_GET_BOARD_ORIGIN: &str = "kiapi.board.commands.GetBoardOrigin";
 const CMD_GET_SELECTION: &str = "kiapi.common.commands.GetSelection";
+const CMD_GET_ITEMS: &str = "kiapi.common.commands.GetItems";
 
 const RES_GET_VERSION: &str = "kiapi.common.commands.GetVersionResponse";
 const RES_GET_OPEN_DOCUMENTS: &str = "kiapi.common.commands.GetOpenDocumentsResponse";
@@ -38,6 +40,7 @@ const RES_BOARD_LAYER_RESPONSE: &str = "kiapi.board.commands.BoardLayerResponse"
 const RES_BOARD_LAYERS: &str = "kiapi.board.commands.BoardLayers";
 const RES_VECTOR2: &str = "kiapi.common.types.Vector2";
 const RES_SELECTION_RESPONSE: &str = "kiapi.common.commands.SelectionResponse";
+const RES_GET_ITEMS_RESPONSE: &str = "kiapi.common.commands.GetItemsResponse";
 
 #[derive(Clone, Debug)]
 pub struct KiCadClient {
@@ -314,6 +317,51 @@ impl KiCadClient {
         Ok(summarize_selection(payload.items))
     }
 
+    pub async fn get_selection_raw(&self) -> Result<Vec<prost_types::Any>, KiCadError> {
+        let document = self.current_board_document_proto().await?;
+        let command = common_commands::GetSelection {
+            header: Some(common_types::ItemHeader {
+                document: Some(document),
+                container: None,
+                field_mask: None,
+            }),
+            types: Vec::new(),
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_GET_SELECTION))
+            .await?;
+
+        let payload: common_commands::SelectionResponse =
+            envelope::unpack_any(&response, RES_SELECTION_RESPONSE)?;
+
+        Ok(payload.items)
+    }
+
+    pub async fn get_selection_details(&self) -> Result<Vec<SelectionItemDetail>, KiCadError> {
+        let items = self.get_selection_raw().await?;
+        let mut details = Vec::with_capacity(items.len());
+        for item in items {
+            let raw_len = item.value.len();
+            let type_url = item.type_url.clone();
+            let detail = selection_item_detail(&item)?;
+            details.push(SelectionItemDetail {
+                type_url,
+                detail,
+                raw_len,
+            });
+        }
+
+        Ok(details)
+    }
+
+    pub async fn get_pad_netlist(&self) -> Result<Vec<PadNetEntry>, KiCadError> {
+        let footprint_items = self
+            .get_items_raw(vec![common_types::KiCadObjectType::KotPcbFootprint as i32])
+            .await?;
+        pad_netlist_from_footprint_items(footprint_items)
+    }
+
     async fn send_command(
         &self,
         command: prost_types::Any,
@@ -356,6 +404,36 @@ impl KiCadClient {
         let docs = self.get_open_documents(DocumentType::Pcb).await?;
         let selected = select_single_board_document(&docs)?;
         Ok(model_document_to_proto(selected))
+    }
+
+    async fn get_items_raw(&self, types: Vec<i32>) -> Result<Vec<prost_types::Any>, KiCadError> {
+        let document = self.current_board_document_proto().await?;
+        let command = common_commands::GetItems {
+            header: Some(common_types::ItemHeader {
+                document: Some(document),
+                container: None,
+                field_mask: None,
+            }),
+            types,
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_GET_ITEMS))
+            .await?;
+
+        let payload: common_commands::GetItemsResponse =
+            envelope::unpack_any(&response, RES_GET_ITEMS_RESPONSE)?;
+
+        let request_status = common_types::ItemRequestStatus::try_from(payload.status)
+            .unwrap_or(common_types::ItemRequestStatus::IrsUnknown);
+
+        if request_status != common_types::ItemRequestStatus::IrsOk {
+            return Err(KiCadError::ItemStatus {
+                code: request_status.as_str_name().to_string(),
+            });
+        }
+
+        Ok(payload.items)
     }
 }
 
@@ -442,6 +520,156 @@ fn summarize_selection(items: Vec<prost_types::Any>) -> SelectionSummary {
             .map(|(type_url, count)| SelectionTypeCount { type_url, count })
             .collect(),
     }
+}
+
+fn decode_any<T: prost::Message + Default>(
+    payload: &prost_types::Any,
+    expected_type_name: &str,
+) -> Result<T, KiCadError> {
+    let expected_type_url = envelope::type_url(expected_type_name);
+    if payload.type_url != expected_type_url {
+        return Err(KiCadError::UnexpectedPayloadType {
+            expected_type_url,
+            actual_type_url: payload.type_url.clone(),
+        });
+    }
+
+    T::decode(payload.value.as_slice()).map_err(|err| KiCadError::ProtobufDecode(err.to_string()))
+}
+
+fn pad_netlist_from_footprint_items(
+    footprint_items: Vec<prost_types::Any>,
+) -> Result<Vec<PadNetEntry>, KiCadError> {
+    let mut entries = Vec::new();
+    for item in footprint_items {
+        if item.type_url != envelope::type_url("kiapi.board.types.FootprintInstance") {
+            continue;
+        }
+
+        let footprint = decode_any::<board_types::FootprintInstance>(
+            &item,
+            "kiapi.board.types.FootprintInstance",
+        )?;
+
+        let footprint_reference = footprint
+            .reference_field
+            .as_ref()
+            .and_then(|field| field.text.as_ref())
+            .and_then(|board_text| board_text.text.as_ref())
+            .map(|text| text.text.clone())
+            .filter(|value| !value.is_empty());
+
+        let footprint_id = footprint.id.as_ref().map(|id| id.value.clone());
+
+        let footprint_definition = footprint.definition.unwrap_or_default();
+        for sub_item in footprint_definition.items {
+            if sub_item.type_url != envelope::type_url("kiapi.board.types.Pad") {
+                continue;
+            }
+
+            let pad = decode_any::<board_types::Pad>(&sub_item, "kiapi.board.types.Pad")?;
+            let (net_code, net_name) = match pad.net {
+                Some(net) => {
+                    let code = net.code.map(|code| code.value);
+                    let name = if net.name.is_empty() {
+                        None
+                    } else {
+                        Some(net.name)
+                    };
+                    (code, name)
+                }
+                None => (None, None),
+            };
+
+            entries.push(PadNetEntry {
+                footprint_reference: footprint_reference.clone(),
+                footprint_id: footprint_id.clone(),
+                pad_id: pad.id.map(|id| id.value),
+                pad_number: pad.number,
+                net_code,
+                net_name,
+            });
+        }
+    }
+
+    Ok(entries)
+}
+
+fn selection_item_detail(item: &prost_types::Any) -> Result<String, KiCadError> {
+    if item.type_url == envelope::type_url("kiapi.board.types.Track") {
+        let track = decode_any::<board_types::Track>(item, "kiapi.board.types.Track")?;
+        let id = track.id.map_or_else(|| "-".to_string(), |id| id.value);
+        let start = track
+            .start
+            .map_or_else(|| "-".to_string(), |v| format!("{},{}", v.x_nm, v.y_nm));
+        let end = track
+            .end
+            .map_or_else(|| "-".to_string(), |v| format!("{},{}", v.x_nm, v.y_nm));
+        let width = track
+            .width
+            .map_or_else(|| "-".to_string(), |w| w.value_nm.to_string());
+        let layer = layer_to_model(track.layer).name;
+        let net = track
+            .net
+            .map(|n| format!("{}:{}", n.code.map_or(0, |c| c.value), n.name))
+            .unwrap_or_else(|| "-".to_string());
+
+        return Ok(format!(
+            "track id={id} start_nm={start} end_nm={end} width_nm={width} layer={layer} net={net}"
+        ));
+    }
+
+    if item.type_url == envelope::type_url("kiapi.board.types.FootprintInstance") {
+        let fp = decode_any::<board_types::FootprintInstance>(
+            item,
+            "kiapi.board.types.FootprintInstance",
+        )?;
+        let id = fp.id.map_or_else(|| "-".to_string(), |id| id.value);
+        let reference = fp
+            .reference_field
+            .as_ref()
+            .and_then(|field| field.text.as_ref())
+            .and_then(|board_text| board_text.text.as_ref())
+            .map(|text| text.text.clone())
+            .unwrap_or_else(|| "-".to_string());
+        let position = fp
+            .position
+            .map_or_else(|| "-".to_string(), |v| format!("{},{}", v.x_nm, v.y_nm));
+        let layer = layer_to_model(fp.layer).name;
+        return Ok(format!(
+            "footprint id={id} ref={reference} pos_nm={position} layer={layer}"
+        ));
+    }
+
+    if item.type_url == envelope::type_url("kiapi.board.types.Field") {
+        let field = decode_any::<board_types::Field>(item, "kiapi.board.types.Field")?;
+        let text = field
+            .text
+            .as_ref()
+            .and_then(|board_text| board_text.text.as_ref())
+            .map(|text| text.text.clone())
+            .unwrap_or_else(|| "-".to_string());
+        return Ok(format!(
+            "field name={} visible={} text={}",
+            field.name, field.visible, text
+        ));
+    }
+
+    if item.type_url == envelope::type_url("kiapi.board.types.BoardGraphicShape") {
+        let shape = decode_any::<board_types::BoardGraphicShape>(
+            item,
+            "kiapi.board.types.BoardGraphicShape",
+        )?;
+        let id = shape.id.map_or_else(|| "-".to_string(), |id| id.value);
+        let layer = layer_to_model(shape.layer).name;
+        let net = shape
+            .net
+            .map(|n| format!("{}:{}", n.code.map_or(0, |c| c.value), n.name))
+            .unwrap_or_else(|| "-".to_string());
+        return Ok(format!("graphic id={id} layer={layer} net={net}"));
+    }
+
+    Ok(format!("unparsed payload ({} bytes)", item.value.len()))
 }
 
 fn select_single_board_document(
@@ -562,10 +790,12 @@ fn default_client_name() -> String {
 mod tests {
     use super::{
         layer_to_model, model_document_to_proto, normalize_socket_uri,
-        select_single_board_document, select_single_project_path, summarize_selection,
+        pad_netlist_from_footprint_items, select_single_board_document, select_single_project_path,
+        selection_item_detail, summarize_selection,
     };
     use crate::error::KiCadError;
     use crate::model::common::{DocumentSpecifier, DocumentType, ProjectInfo};
+    use prost::Message;
     use std::path::PathBuf;
 
     #[test]
@@ -725,5 +955,121 @@ mod tests {
             summary.type_url_counts[1].type_url,
             "type.googleapis.com/kiapi.board.types.Via"
         );
+    }
+
+    #[test]
+    fn selection_item_detail_reports_track_fields() {
+        let track = crate::proto::kiapi::board::types::Track {
+            id: Some(crate::proto::kiapi::common::types::Kiid {
+                value: "track-id".to_string(),
+            }),
+            start: Some(crate::proto::kiapi::common::types::Vector2 { x_nm: 1, y_nm: 2 }),
+            end: Some(crate::proto::kiapi::common::types::Vector2 { x_nm: 3, y_nm: 4 }),
+            width: Some(crate::proto::kiapi::common::types::Distance { value_nm: 99 }),
+            locked: 0,
+            layer: crate::proto::kiapi::board::types::BoardLayer::BlFCu as i32,
+            net: Some(crate::proto::kiapi::board::types::Net {
+                code: Some(crate::proto::kiapi::board::types::NetCode { value: 12 }),
+                name: "GND".to_string(),
+            }),
+        };
+
+        let item = prost_types::Any {
+            type_url: super::envelope::type_url("kiapi.board.types.Track"),
+            value: track.encode_to_vec(),
+        };
+
+        let detail = selection_item_detail(&item).expect("track detail should decode");
+        assert!(detail.contains("track id=track-id"));
+        assert!(detail.contains("layer=BL_F_Cu"));
+        assert!(detail.contains("net=12:GND"));
+    }
+
+    #[test]
+    fn pad_netlist_from_footprint_items_extracts_pad_entries() {
+        let pad = crate::proto::kiapi::board::types::Pad {
+            id: Some(crate::proto::kiapi::common::types::Kiid {
+                value: "pad-id".to_string(),
+            }),
+            locked: 0,
+            number: "1".to_string(),
+            net: Some(crate::proto::kiapi::board::types::Net {
+                code: Some(crate::proto::kiapi::board::types::NetCode { value: 5 }),
+                name: "Net-(P1-PM)".to_string(),
+            }),
+            r#type: crate::proto::kiapi::board::types::PadType::PtPth as i32,
+            pad_stack: None,
+            position: None,
+            copper_clearance_override: None,
+            pad_to_die_length: None,
+            symbol_pin: None,
+            pad_to_die_delay: None,
+        };
+
+        let footprint = crate::proto::kiapi::board::types::FootprintInstance {
+            id: Some(crate::proto::kiapi::common::types::Kiid {
+                value: "fp-id".to_string(),
+            }),
+            position: None,
+            orientation: None,
+            layer: crate::proto::kiapi::board::types::BoardLayer::BlFCu as i32,
+            locked: 0,
+            definition: Some(crate::proto::kiapi::board::types::Footprint {
+                id: None,
+                anchor: None,
+                attributes: None,
+                overrides: None,
+                net_ties: Vec::new(),
+                private_layers: Vec::new(),
+                reference_field: None,
+                value_field: None,
+                datasheet_field: None,
+                description_field: None,
+                items: vec![prost_types::Any {
+                    type_url: super::envelope::type_url("kiapi.board.types.Pad"),
+                    value: pad.encode_to_vec(),
+                }],
+                jumpers: None,
+            }),
+            reference_field: Some(crate::proto::kiapi::board::types::Field {
+                id: None,
+                name: "Reference".to_string(),
+                text: Some(crate::proto::kiapi::board::types::BoardText {
+                    id: None,
+                    text: Some(crate::proto::kiapi::common::types::Text {
+                        position: None,
+                        attributes: None,
+                        text: "P1".to_string(),
+                        hyperlink: String::new(),
+                    }),
+                    layer: 0,
+                    knockout: false,
+                    locked: 0,
+                }),
+                visible: true,
+            }),
+            value_field: None,
+            datasheet_field: None,
+            description_field: None,
+            attributes: None,
+            overrides: None,
+            symbol_path: None,
+            symbol_sheet_name: String::new(),
+            symbol_sheet_filename: String::new(),
+            symbol_footprint_filters: String::new(),
+        };
+
+        let items = vec![prost_types::Any {
+            type_url: super::envelope::type_url("kiapi.board.types.FootprintInstance"),
+            value: footprint.encode_to_vec(),
+        }];
+
+        let netlist = pad_netlist_from_footprint_items(items)
+            .expect("pad netlist should decode from footprint");
+        assert_eq!(netlist.len(), 1);
+        let entry = &netlist[0];
+        assert_eq!(entry.footprint_reference.as_deref(), Some("P1"));
+        assert_eq!(entry.pad_number, "1");
+        assert_eq!(entry.net_code, Some(5));
     }
 }

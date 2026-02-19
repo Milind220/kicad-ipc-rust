@@ -53,6 +53,16 @@ pub struct Vector2Nm {
     pub y_nm: i64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PadNetEntry {
+    pub footprint_reference: Option<String>,
+    pub footprint_id: Option<String>,
+    pub pad_id: Option<String>,
+    pub pad_number: String,
+    pub net_code: Option<i32>,
+    pub net_name: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;

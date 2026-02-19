@@ -83,6 +83,24 @@ Show summary of current PCB selection by item type:
 cargo run --bin kicad-ipc-cli -- selection-summary
 ```
 
+Show parsed details for currently selected items:
+
+```bash
+cargo run --bin kicad-ipc-cli -- selection-details
+```
+
+Show raw protobuf payload bytes for selected items:
+
+```bash
+cargo run --bin kicad-ipc-cli -- selection-raw
+```
+
+Show pad-level netlist entries (footprint/pad/net):
+
+```bash
+cargo run --bin kicad-ipc-cli -- netlist-pads
+```
+
 Get current project path (derived from open PCB docs):
 
 ```bash

@@ -104,3 +104,10 @@ pub struct SelectionSummary {
     pub total_items: usize,
     pub type_url_counts: Vec<SelectionTypeCount>,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SelectionItemDetail {
+    pub type_url: String,
+    pub detail: String,
+    pub raw_len: usize,
+}

@@ -21,8 +21,9 @@ pub(crate) mod proto;
 pub use crate::client::{ClientBuilder, KiCadClient};
 pub use crate::error::KiCadError;
 pub use crate::model::board::{
-    BoardEnabledLayers, BoardLayerInfo, BoardNet, BoardOriginKind, Vector2Nm,
+    BoardEnabledLayers, BoardLayerInfo, BoardNet, BoardOriginKind, PadNetEntry, Vector2Nm,
 };
 pub use crate::model::common::{
-    DocumentSpecifier, DocumentType, SelectionSummary, SelectionTypeCount, VersionInfo,
+    DocumentSpecifier, DocumentType, SelectionItemDetail, SelectionSummary, SelectionTypeCount,
+    VersionInfo,
 };

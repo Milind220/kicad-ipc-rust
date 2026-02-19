@@ -24,6 +24,9 @@ enum Command {
     VisibleLayers,
     BoardOrigin { kind: BoardOriginKind },
     SelectionSummary,
+    SelectionDetails,
+    SelectionRaw,
+    NetlistPads,
     Smoke,
     Help,
 }
@@ -166,6 +169,46 @@ async fn run() -> Result<(), KiCadError> {
                 println!("type_url={} count={}", entry.type_url, entry.count);
             }
         }
+        Command::SelectionDetails => {
+            let details = client.get_selection_details().await?;
+            println!("selection_total={}", details.len());
+            for (index, item) in details.iter().enumerate() {
+                println!(
+                    "[{index}] type_url={} raw_len={} detail={}",
+                    item.type_url, item.raw_len, item.detail
+                );
+            }
+        }
+        Command::SelectionRaw => {
+            let items = client.get_selection_raw().await?;
+            println!("selection_total={}", items.len());
+            for (index, item) in items.iter().enumerate() {
+                println!(
+                    "[{index}] type_url={} raw_len={} raw_hex={}",
+                    item.type_url,
+                    item.value.len(),
+                    bytes_to_hex(&item.value)
+                );
+            }
+        }
+        Command::NetlistPads => {
+            let entries = client.get_pad_netlist().await?;
+            println!("pad_net_entries={}", entries.len());
+            for entry in entries {
+                println!(
+                    "footprint_ref={} footprint_id={} pad_id={} pad_number={} net_code={} net_name={}",
+                    entry.footprint_reference.as_deref().unwrap_or("-"),
+                    entry.footprint_id.as_deref().unwrap_or("-"),
+                    entry.pad_id.as_deref().unwrap_or("-"),
+                    entry.pad_number,
+                    entry
+                        .net_code
+                        .map(|code| code.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                    entry.net_name.as_deref().unwrap_or("-")
+                );
+            }
+        }
         Command::Smoke => {
             client.ping().await?;
             let version = client.get_version().await?;
@@ -254,6 +297,9 @@ fn parse_args() -> Result<(CliConfig, Command), KiCadError> {
             Command::BoardOrigin { kind }
         }
         "selection-summary" => Command::SelectionSummary,
+        "selection-details" => Command::SelectionDetails,
+        "selection-raw" => Command::SelectionRaw,
+        "netlist-pads" => Command::NetlistPads,
         "smoke" => Command::Smoke,
         "open-docs" => {
             let mut document_type = DocumentType::Pcb;
@@ -292,6 +338,23 @@ fn default_config() -> CliConfig {
 
 fn print_help() {
     println!(
-        "kicad-ipc-cli\n\nUSAGE:\n  cargo run --bin kicad-ipc-cli -- [--socket URI] [--token TOKEN] [--timeout-ms N] <command> [command options]\n\nCOMMANDS:\n  ping                         Check IPC connectivity\n  version                      Fetch KiCad version\n  open-docs [--type <type>]    List open docs (default type: pcb)\n  project-path                 Get current project path from open PCB docs\n  board-open                   Exit non-zero if no PCB doc is open\n  nets                         List board nets (requires one open PCB)\n  enabled-layers               List enabled board layers\n  active-layer                 Show active board layer\n  visible-layers               Show currently visible board layers\n  board-origin [--type <t>]    Show board origin (`grid` default, or `drill`)\n  selection-summary            Show current selection item type counts\n  smoke                        ping + version + board-open summary\n  help                         Show help\n\nTYPES:\n  schematic | symbol | pcb | footprint | drawing-sheet | project\n"
+        "kicad-ipc-cli\n\nUSAGE:\n  cargo run --bin kicad-ipc-cli -- [--socket URI] [--token TOKEN] [--timeout-ms N] <command> [command options]\n\nCOMMANDS:\n  ping                         Check IPC connectivity\n  version                      Fetch KiCad version\n  open-docs [--type <type>]    List open docs (default type: pcb)\n  project-path                 Get current project path from open PCB docs\n  board-open                   Exit non-zero if no PCB doc is open\n  nets                         List board nets (requires one open PCB)\n  netlist-pads                 Emit pad-level netlist data (with footprint context)\n  enabled-layers               List enabled board layers\n  active-layer                 Show active board layer\n  visible-layers               Show currently visible board layers\n  board-origin [--type <t>]    Show board origin (`grid` default, or `drill`)\n  selection-summary            Show current selection item type counts\n  selection-details            Show parsed details for selected items\n  selection-raw                Show raw Any payload bytes for selected items\n  smoke                        ping + version + board-open summary\n  help                         Show help\n\nTYPES:\n  schematic | symbol | pcb | footprint | drawing-sheet | project\n"
     );
+}
+
+fn bytes_to_hex(data: &[u8]) -> String {
+    let mut output = String::with_capacity(data.len() * 2);
+    for byte in data {
+        output.push(hex_char((byte >> 4) & 0x0f));
+        output.push(hex_char(byte & 0x0f));
+    }
+    output
+}
+
+fn hex_char(value: u8) -> char {
+    match value {
+        0..=9 => char::from(b'0' + value),
+        10..=15 => char::from(b'a' + (value - 10)),
+        _ => '?',
+    }
 }
