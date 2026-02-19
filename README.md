@@ -17,3 +17,125 @@ Early scaffold phase. Core architecture + step-by-step implementation plan:
 ## Local Testing
 
 - CLI runbook: `/Users/milindsharma/Developer/kicad-oss/kicad-ipc-rust/docs/TEST_CLI.md`
+
+## KiCad v10 RC1.1 API Completion Matrix
+
+Source of truth for this matrix:
+- `/Users/milindsharma/Developer/kicad-oss/kicad-ipc-rust/proto/common/commands/base_commands.proto`
+- `/Users/milindsharma/Developer/kicad-oss/kicad-ipc-rust/proto/common/commands/editor_commands.proto`
+- `/Users/milindsharma/Developer/kicad-oss/kicad-ipc-rust/proto/common/commands/project_commands.proto`
+- `/Users/milindsharma/Developer/kicad-oss/kicad-ipc-rust/proto/board/board_commands.proto`
+- `/Users/milindsharma/Developer/kicad-oss/kicad-ipc-rust/proto/schematic/schematic_commands.proto`
+
+Legend:
+- `Implemented` = wrapped in current Rust client (`src/client.rs`).
+- `Not yet` = exists in proto, not wrapped yet.
+- Command messages only (request payloads); helper/response messages excluded.
+
+### Section Coverage
+
+| Section | Proto Commands | Implemented | Coverage |
+| --- | ---: | ---: | ---: |
+| Common (base) | 6 | 2 | 33% |
+| Common editor/document | 23 | 9 | 39% |
+| Project manager | 5 | 0 | 0% |
+| Board editor (PCB) | 22 | 13 | 59% |
+| Schematic editor (dedicated proto commands) | 0 | 0 | n/a |
+| **Total** | **56** | **24** | **43%** |
+
+### Common (base)
+
+| KiCad Command | Status | Rust API |
+| --- | --- | --- |
+| `Ping` | Implemented | `KiCadClient::ping` |
+| `GetVersion` | Implemented | `KiCadClient::get_version` |
+| `GetKiCadBinaryPath` | Not yet | - |
+| `GetTextExtents` | Not yet | - |
+| `GetTextAsShapes` | Not yet | - |
+| `GetPluginSettingsPath` | Not yet | - |
+
+### Common editor/document
+
+| KiCad Command | Status | Rust API |
+| --- | --- | --- |
+| `RefreshEditor` | Not yet | - |
+| `GetOpenDocuments` | Implemented | `KiCadClient::get_open_documents`, `KiCadClient::get_current_project_path`, `KiCadClient::has_open_board` |
+| `SaveDocument` | Not yet | - |
+| `SaveCopyOfDocument` | Not yet | - |
+| `RevertDocument` | Not yet | - |
+| `RunAction` | Not yet | - |
+| `BeginCommit` | Not yet | - |
+| `EndCommit` | Not yet | - |
+| `CreateItems` | Not yet | - |
+| `GetItems` | Implemented | `KiCadClient::get_items_raw_by_type_codes`, `KiCadClient::get_items_details_by_type_codes`, `KiCadClient::get_all_pcb_items_raw`, `KiCadClient::get_all_pcb_items_details`, `KiCadClient::get_pad_netlist` |
+| `GetItemsById` | Implemented | `KiCadClient::get_items_by_id_raw`, `KiCadClient::get_items_by_id_details` |
+| `UpdateItems` | Not yet | - |
+| `DeleteItems` | Not yet | - |
+| `GetBoundingBox` | Implemented | `KiCadClient::get_item_bounding_boxes` |
+| `GetSelection` | Implemented | `KiCadClient::get_selection_raw`, `KiCadClient::get_selection_summary`, `KiCadClient::get_selection_details` |
+| `AddToSelection` | Not yet | - |
+| `RemoveFromSelection` | Not yet | - |
+| `ClearSelection` | Not yet | - |
+| `HitTest` | Implemented | `KiCadClient::hit_test_item` |
+| `GetTitleBlockInfo` | Implemented | `KiCadClient::get_title_block_info` |
+| `SaveDocumentToString` | Implemented | `KiCadClient::get_board_as_string` |
+| `SaveSelectionToString` | Implemented | `KiCadClient::get_selection_as_string` |
+| `ParseAndCreateItemsFromString` | Not yet | - |
+
+### Project manager
+
+| KiCad Command | Status | Rust API |
+| --- | --- | --- |
+| `GetNetClasses` | Not yet | - |
+| `SetNetClasses` | Not yet | - |
+| `ExpandTextVariables` | Not yet | - |
+| `GetTextVariables` | Not yet | - |
+| `SetTextVariables` | Not yet | - |
+
+### Board editor (PCB)
+
+| KiCad Command | Status | Rust API |
+| --- | --- | --- |
+| `GetBoardStackup` | Implemented | `KiCadClient::get_board_stackup_debug` |
+| `UpdateBoardStackup` | Not yet | - |
+| `GetBoardEnabledLayers` | Implemented | `KiCadClient::get_board_enabled_layers` |
+| `SetBoardEnabledLayers` | Not yet | - |
+| `GetGraphicsDefaults` | Implemented | `KiCadClient::get_graphics_defaults_debug` |
+| `GetBoardOrigin` | Implemented | `KiCadClient::get_board_origin` |
+| `SetBoardOrigin` | Not yet | - |
+| `GetNets` | Implemented | `KiCadClient::get_nets` |
+| `GetItemsByNet` | Implemented | `KiCadClient::get_items_by_net_raw` |
+| `GetItemsByNetClass` | Implemented | `KiCadClient::get_items_by_net_class_raw` |
+| `GetNetClassForNets` | Implemented | `KiCadClient::get_netclass_for_nets_debug` |
+| `RefillZones` | Not yet | - |
+| `GetPadShapeAsPolygon` | Implemented | `KiCadClient::get_pad_shape_as_polygon`, `KiCadClient::get_pad_shape_as_polygon_debug` |
+| `CheckPadstackPresenceOnLayers` | Implemented | `KiCadClient::check_padstack_presence_on_layers`, `KiCadClient::check_padstack_presence_on_layers_debug` |
+| `InjectDrcError` | Not yet | - |
+| `GetVisibleLayers` | Implemented | `KiCadClient::get_visible_layers` |
+| `SetVisibleLayers` | Not yet | - |
+| `GetActiveLayer` | Implemented | `KiCadClient::get_active_layer` |
+| `SetActiveLayer` | Not yet | - |
+| `GetBoardEditorAppearanceSettings` | Implemented | `KiCadClient::get_board_editor_appearance_settings_debug` |
+| `SetBoardEditorAppearanceSettings` | Not yet | - |
+| `InteractiveMoveItems` | Not yet | - |
+
+### Schematic editor
+
+| Item | Value |
+| --- | --- |
+| Dedicated commands in `proto/schematic/schematic_commands.proto` | None in current proto snapshot |
+| Coverage | n/a |
+
+### Symbol editor
+
+| Item | Value |
+| --- | --- |
+| Dedicated symbol-editor command proto | None in current snapshot |
+| Current path | Uses common editor/document commands via `DocumentType::DOCTYPE_SYMBOL` |
+
+### Footprint editor
+
+| Item | Value |
+| --- | --- |
+| Dedicated footprint-editor command proto | None in current snapshot |
+| Current path | Uses common editor/document commands via `DocumentType::DOCTYPE_FOOTPRINT` |
