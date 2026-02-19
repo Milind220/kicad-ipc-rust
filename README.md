@@ -1,5 +1,7 @@
 # KiCad IPC API Rust
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Milind220/kicad-ipc-rust)
+
 MIT-licensed Rust bindings for the KiCad IPC API.
 
 ## Current Status
