@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -8,6 +9,12 @@ use kicad_ipc::{
     BoardOriginKind, ClientBuilder, DocumentType, KiCadClient, KiCadError, PcbObjectTypeCode,
     Vector2Nm,
 };
+
+const REPORT_MAX_PAD_NET_ROWS: usize = 2_000;
+const REPORT_MAX_PRESENCE_ROWS: usize = 2_000;
+const REPORT_MAX_ITEM_DEBUG_ROWS_PER_TYPE: usize = 5;
+const REPORT_MAX_ITEM_DEBUG_CHARS: usize = 8_000;
+const REPORT_MAX_BOARD_SNAPSHOT_CHARS: usize = 750_000;
 
 #[derive(Debug)]
 struct CliConfig {
@@ -55,6 +62,16 @@ enum Command {
         include_debug: bool,
     },
     ItemsRawAllPcb {
+        include_debug: bool,
+    },
+    PadShapePolygon {
+        pad_ids: Vec<String>,
+        layer_id: i32,
+        include_debug: bool,
+    },
+    PadstackPresence {
+        item_ids: Vec<String>,
+        layer_ids: Vec<i32>,
         include_debug: bool,
     },
     TitleBlock,
@@ -369,6 +386,70 @@ async fn run() -> Result<(), KiCadError> {
                 }
             }
         }
+        Command::PadShapePolygon {
+            pad_ids,
+            layer_id,
+            include_debug,
+        } => {
+            let rows = client
+                .get_pad_shape_as_polygon(pad_ids.clone(), layer_id)
+                .await?;
+            println!(
+                "pad_shape_total={} layer_id={} requested_pad_count={}",
+                rows.len(),
+                layer_id,
+                pad_ids.len()
+            );
+            for row in &rows {
+                let outline_nodes = row
+                    .polygon
+                    .outline
+                    .as_ref()
+                    .map(|outline| outline.nodes.len())
+                    .unwrap_or(0);
+                println!(
+                    "pad_id={} layer_id={} layer_name={} outline_nodes={} hole_count={}",
+                    row.pad_id,
+                    row.layer_id,
+                    row.layer_name,
+                    outline_nodes,
+                    row.polygon.holes.len()
+                );
+            }
+            if include_debug {
+                let debug = client
+                    .get_pad_shape_as_polygon_debug(pad_ids, layer_id)
+                    .await?;
+                println!("debug={}", debug.replace('\n', "\\n").replace('\t', " "));
+            }
+        }
+        Command::PadstackPresence {
+            item_ids,
+            layer_ids,
+            include_debug,
+        } => {
+            let rows = client
+                .check_padstack_presence_on_layers(item_ids.clone(), layer_ids.clone())
+                .await?;
+            println!(
+                "padstack_presence_total={} requested_item_count={} requested_layer_count={}",
+                rows.len(),
+                item_ids.len(),
+                layer_ids.len()
+            );
+            for row in &rows {
+                println!(
+                    "item_id={} layer_id={} layer_name={} presence={}",
+                    row.item_id, row.layer_id, row.layer_name, row.presence
+                );
+            }
+            if include_debug {
+                let debug = client
+                    .check_padstack_presence_on_layers_debug(item_ids, layer_ids)
+                    .await?;
+                println!("debug={}", debug.replace('\n', "\\n").replace('\t', " "));
+            }
+        }
         Command::TitleBlock => {
             let title_block = client.get_title_block_info().await?;
             println!("title={}", title_block.title);
@@ -648,6 +729,111 @@ fn parse_args() -> Result<(CliConfig, Command), KiCadError> {
             let include_debug = args.iter().any(|arg| arg == "--debug");
             Command::ItemsRawAllPcb { include_debug }
         }
+        "pad-shape-polygon" => {
+            let mut pad_ids = Vec::new();
+            let mut layer_id = None;
+            let mut include_debug = false;
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--pad-id" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for pad-shape-polygon --pad-id".to_string(),
+                        })?;
+                        pad_ids.push(value.clone());
+                        i += 2;
+                    }
+                    "--layer-id" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for pad-shape-polygon --layer-id".to_string(),
+                        })?;
+                        layer_id =
+                            Some(value.parse::<i32>().map_err(|err| KiCadError::Config {
+                                reason: format!(
+                                    "invalid pad-shape-polygon --layer-id `{value}`: {err}"
+                                ),
+                            })?);
+                        i += 2;
+                    }
+                    "--debug" => {
+                        include_debug = true;
+                        i += 1;
+                    }
+                    _ => {
+                        i += 1;
+                    }
+                }
+            }
+
+            if pad_ids.is_empty() {
+                return Err(KiCadError::Config {
+                    reason: "pad-shape-polygon requires one or more `--pad-id <uuid>` arguments"
+                        .to_string(),
+                });
+            }
+
+            Command::PadShapePolygon {
+                pad_ids,
+                layer_id: layer_id.ok_or_else(|| KiCadError::Config {
+                    reason: "pad-shape-polygon requires `--layer-id <i32>`".to_string(),
+                })?,
+                include_debug,
+            }
+        }
+        "padstack-presence" => {
+            let mut item_ids = Vec::new();
+            let mut layer_ids = Vec::new();
+            let mut include_debug = false;
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--item-id" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for padstack-presence --item-id".to_string(),
+                        })?;
+                        item_ids.push(value.clone());
+                        i += 2;
+                    }
+                    "--layer-id" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for padstack-presence --layer-id".to_string(),
+                        })?;
+                        layer_ids.push(value.parse::<i32>().map_err(|err| KiCadError::Config {
+                            reason: format!(
+                                "invalid padstack-presence --layer-id `{value}`: {err}"
+                            ),
+                        })?);
+                        i += 2;
+                    }
+                    "--debug" => {
+                        include_debug = true;
+                        i += 1;
+                    }
+                    _ => {
+                        i += 1;
+                    }
+                }
+            }
+
+            if item_ids.is_empty() {
+                return Err(KiCadError::Config {
+                    reason: "padstack-presence requires one or more `--item-id <uuid>` arguments"
+                        .to_string(),
+                });
+            }
+            if layer_ids.is_empty() {
+                return Err(KiCadError::Config {
+                    reason: "padstack-presence requires one or more `--layer-id <i32>` arguments"
+                        .to_string(),
+                });
+            }
+
+            Command::PadstackPresence {
+                item_ids,
+                layer_ids,
+                include_debug,
+            }
+        }
         "title-block" => Command::TitleBlock,
         "board-as-string" => Command::BoardAsString,
         "selection-as-string" => Command::SelectionAsString,
@@ -704,13 +890,13 @@ fn default_config() -> CliConfig {
     CliConfig {
         socket: None,
         token: None,
-        timeout_ms: 3_000,
+        timeout_ms: 15_000,
     }
 }
 
 fn print_help() {
     println!(
-        "kicad-ipc-cli\n\nUSAGE:\n  cargo run --bin kicad-ipc-cli -- [--socket URI] [--token TOKEN] [--timeout-ms N] <command> [command options]\n\nCOMMANDS:\n  ping                         Check IPC connectivity\n  version                      Fetch KiCad version\n  open-docs [--type <type>]    List open docs (default type: pcb)\n  project-path                 Get current project path from open PCB docs\n  board-open                   Exit non-zero if no PCB doc is open\n  nets                         List board nets (requires one open PCB)\n  netlist-pads                 Emit pad-level netlist data (with footprint context)\n  items-by-id --id <uuid> ...  Show parsed details for specific item IDs\n  item-bbox --id <uuid> ...    Show bounding boxes for item IDs\n  hit-test --id <uuid> --x-nm <x> --y-nm <y> [--tolerance-nm <n>]\n                               Hit-test one item at a point\n  types-pcb                    List PCB KiCad object type IDs from proto enum\n  items-raw --type-id <id> ... Dump raw Any payloads for requested item type IDs\n  items-raw-all-pcb [--debug]  Dump all PCB item payloads across all PCB object types\n  title-block                  Show title block fields\n  board-as-string              Dump board as KiCad s-expression text\n  selection-as-string          Dump current selection as KiCad s-expression text\n  stackup-debug                Dump raw stackup response\n  graphics-defaults-debug      Dump raw graphics defaults response\n  appearance-debug             Dump raw editor appearance settings response\n  netclass-debug               Dump raw netclass map for current board nets\n  proto-coverage-board-read    Print board-read command coverage vs proto\n  board-read-report [--out P]  Write markdown board reconstruction report\n  enabled-layers               List enabled board layers\n  active-layer                 Show active board layer\n  visible-layers               Show currently visible board layers\n  board-origin [--type <t>]    Show board origin (`grid` default, or `drill`)\n  selection-summary            Show current selection item type counts\n  selection-details            Show parsed details for selected items\n  selection-raw                Show raw Any payload bytes for selected items\n  smoke                        ping + version + board-open summary\n  help                         Show help\n\nTYPES:\n  schematic | symbol | pcb | footprint | drawing-sheet | project\n"
+        "kicad-ipc-cli\n\nUSAGE:\n  cargo run --bin kicad-ipc-cli -- [--socket URI] [--token TOKEN] [--timeout-ms N] <command> [command options]\n\nCOMMANDS:\n  ping                         Check IPC connectivity\n  version                      Fetch KiCad version\n  open-docs [--type <type>]    List open docs (default type: pcb)\n  project-path                 Get current project path from open PCB docs\n  board-open                   Exit non-zero if no PCB doc is open\n  nets                         List board nets (requires one open PCB)\n  netlist-pads                 Emit pad-level netlist data (with footprint context)\n  items-by-id --id <uuid> ...  Show parsed details for specific item IDs\n  item-bbox --id <uuid> ...    Show bounding boxes for item IDs\n  hit-test --id <uuid> --x-nm <x> --y-nm <y> [--tolerance-nm <n>]\n                               Hit-test one item at a point\n  types-pcb                    List PCB KiCad object type IDs from proto enum\n  items-raw --type-id <id> ... Dump raw Any payloads for requested item type IDs\n  items-raw-all-pcb [--debug]  Dump all PCB item payloads across all PCB object types\n  pad-shape-polygon --pad-id <uuid> ... --layer-id <i32> [--debug]\n                               Dump pad polygons on a target layer\n  padstack-presence --item-id <uuid> ... --layer-id <i32> ... [--debug]\n                               Check padstack shape presence matrix across layers\n  title-block                  Show title block fields\n  board-as-string              Dump board as KiCad s-expression text\n  selection-as-string          Dump current selection as KiCad s-expression text\n  stackup-debug                Dump raw stackup response\n  graphics-defaults-debug      Dump raw graphics defaults response\n  appearance-debug             Dump raw editor appearance settings response\n  netclass-debug               Dump raw netclass map for current board nets\n  proto-coverage-board-read    Print board-read command coverage vs proto\n  board-read-report [--out P]  Write markdown board reconstruction report\n  enabled-layers               List enabled board layers\n  active-layer                 Show active board layer\n  visible-layers               Show currently visible board layers\n  board-origin [--type <t>]    Show board origin (`grid` default, or `drill`)\n  selection-summary            Show current selection item type counts\n  selection-details            Show parsed details for selected items\n  selection-raw                Show raw Any payload bytes for selected items\n  smoke                        ping + version + board-open summary\n  help                         Show help\n\nTYPES:\n  schematic | symbol | pcb | footprint | drawing-sheet | project\n"
     );
 }
 
@@ -756,12 +942,13 @@ async fn build_board_read_report_markdown(client: &KiCadClient) -> Result<String
 
     out.push_str("## Layer / Origin / Nets\n\n");
     let enabled = client.get_board_enabled_layers().await?;
+    let enabled_layers = enabled.layers.clone();
     out.push_str(&format!(
         "- copper_layer_count: {}\n",
         enabled.copper_layer_count
     ));
     out.push_str("- enabled_layers:\n");
-    for layer in enabled.layers {
+    for layer in &enabled_layers {
         out.push_str(&format!("  - {} ({})\n", layer.name, layer.id));
     }
 
@@ -802,8 +989,15 @@ async fn build_board_read_report_markdown(client: &KiCadClient) -> Result<String
 
     out.push_str("### Pad-Level Netlist (Footprint/Pad/Net)\n\n");
     let pad_entries = client.get_pad_netlist().await?;
+    let mut pad_ids = BTreeSet::new();
     out.push_str(&format!("- pad_entry_count: {}\n", pad_entries.len()));
-    for entry in pad_entries {
+    for (index, entry) in pad_entries.iter().enumerate() {
+        if let Some(id) = entry.pad_id.as_ref() {
+            pad_ids.insert(id.clone());
+        }
+        if index >= REPORT_MAX_PAD_NET_ROWS {
+            continue;
+        }
         out.push_str(&format!(
             "- footprint_ref={} footprint_id={} pad_id={} pad_number={} net_code={} net_name={}\n",
             entry.footprint_reference.as_deref().unwrap_or("-"),
@@ -817,7 +1011,98 @@ async fn build_board_read_report_markdown(client: &KiCadClient) -> Result<String
             entry.net_name.as_deref().unwrap_or("-")
         ));
     }
+    if pad_entries.len() > REPORT_MAX_PAD_NET_ROWS {
+        out.push_str(&format!(
+            "- ... omitted {} additional pad net rows (use `netlist-pads` CLI command for full output)\n",
+            pad_entries.len() - REPORT_MAX_PAD_NET_ROWS
+        ));
+    }
     out.push('\n');
+
+    let pad_ids: Vec<String> = pad_ids.into_iter().collect();
+    let enabled_layer_ids: Vec<i32> = enabled_layers.iter().map(|layer| layer.id).collect();
+
+    out.push_str("### Padstack Presence Matrix (Pad IDs x Enabled Layers)\n\n");
+    out.push_str(&format!(
+        "- unique_pad_id_count: {}\n- enabled_layer_count: {}\n",
+        pad_ids.len(),
+        enabled_layer_ids.len()
+    ));
+
+    let mut present_pad_ids_by_layer: BTreeMap<i32, BTreeSet<String>> = BTreeMap::new();
+    let presence_rows = client
+        .check_padstack_presence_on_layers(pad_ids.clone(), enabled_layer_ids)
+        .await?;
+    out.push_str(&format!(
+        "- presence_entry_count: {}\n",
+        presence_rows.len()
+    ));
+    for row in &presence_rows {
+        if row.presence == "PSP_PRESENT" {
+            present_pad_ids_by_layer
+                .entry(row.layer_id)
+                .or_default()
+                .insert(row.item_id.clone());
+        }
+    }
+    for (index, row) in presence_rows.iter().enumerate() {
+        if index >= REPORT_MAX_PRESENCE_ROWS {
+            continue;
+        }
+        out.push_str(&format!(
+            "- item_id={} layer_id={} layer_name={} presence={}\n",
+            row.item_id, row.layer_id, row.layer_name, row.presence
+        ));
+    }
+    if presence_rows.len() > REPORT_MAX_PRESENCE_ROWS {
+        out.push_str(&format!(
+            "- ... omitted {} additional presence rows (use `padstack-presence` CLI command for full output)\n",
+            presence_rows.len() - REPORT_MAX_PRESENCE_ROWS
+        ));
+    }
+    out.push('\n');
+
+    out.push_str("### Pad Shape Polygons (All Present Pad/Layer Pairs)\n\n");
+    out.push_str(
+        "For full per-node coordinate payloads, run `pad-shape-polygon --pad-id ... --layer-id ... --debug` for targeted pad/layer subsets.\n\n",
+    );
+    for layer in &enabled_layers {
+        let pad_ids_on_layer = present_pad_ids_by_layer
+            .get(&layer.id)
+            .map(|set| set.iter().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+
+        out.push_str(&format!(
+            "#### Layer {} ({})\n\n- pad_count_present: {}\n\n",
+            layer.name,
+            layer.id,
+            pad_ids_on_layer.len()
+        ));
+
+        if pad_ids_on_layer.is_empty() {
+            continue;
+        }
+
+        let polygons = client
+            .get_pad_shape_as_polygon(pad_ids_on_layer, layer.id)
+            .await?;
+        out.push_str(&format!("- polygon_entry_count: {}\n\n", polygons.len()));
+        for row in polygons {
+            let summary = polygon_geometry_summary(&row.polygon);
+            out.push_str(&format!(
+                "- pad_id={} layer_id={} layer_name={} outline_nodes={} hole_count={} hole_nodes_total={} point_nodes={} arc_nodes={}\n",
+                row.pad_id,
+                row.layer_id,
+                row.layer_name,
+                summary.outline_nodes,
+                summary.hole_count,
+                summary.hole_nodes_total,
+                summary.point_nodes,
+                summary.arc_nodes
+            ));
+        }
+        out.push('\n');
+    }
 
     out.push_str("## Board/Editor Raw Structures\n\n");
     out.push_str("### Title Block\n\n");
@@ -864,7 +1149,16 @@ async fn build_board_read_report_markdown(client: &KiCadClient) -> Result<String
                 }
                 out.push_str(&format!("- status: ok\n- count: {}\n\n", items.len()));
 
-                for (index, item) in items.iter().enumerate() {
+                for (index, item) in items
+                    .iter()
+                    .take(REPORT_MAX_ITEM_DEBUG_ROWS_PER_TYPE)
+                    .enumerate()
+                {
+                    let mut debug = kicad_ipc::KiCadClient::debug_any_item(item)?;
+                    if debug.len() > REPORT_MAX_ITEM_DEBUG_CHARS {
+                        debug.truncate(REPORT_MAX_ITEM_DEBUG_CHARS);
+                        debug.push_str("\n...<truncated; use items-raw CLI for full payload>");
+                    }
                     out.push_str(&format!(
                         "#### item {}\n\n- type_url: `{}`\n- raw_len: `{}`\n\n",
                         index,
@@ -872,8 +1166,16 @@ async fn build_board_read_report_markdown(client: &KiCadClient) -> Result<String
                         item.value.len()
                     ));
                     out.push_str("```text\n");
-                    out.push_str(&kicad_ipc::KiCadClient::debug_any_item(item)?);
+                    out.push_str(&debug);
                     out.push_str("\n```\n\n");
+                }
+                if items.len() > REPORT_MAX_ITEM_DEBUG_ROWS_PER_TYPE {
+                    out.push_str(&format!(
+                        "- ... omitted {} additional item debug rows for {} (use `items-raw --type-id {}` for full output)\n\n",
+                        items.len() - REPORT_MAX_ITEM_DEBUG_ROWS_PER_TYPE,
+                        object_type.name,
+                        object_type.code
+                    ));
                 }
             }
             Err(err) => {
@@ -896,7 +1198,14 @@ async fn build_board_read_report_markdown(client: &KiCadClient) -> Result<String
     }
 
     out.push_str("## Board File Snapshot (Raw)\n\n```scheme\n");
-    out.push_str(&client.get_board_as_string().await?);
+    let mut board_text = client.get_board_as_string().await?;
+    if board_text.len() > REPORT_MAX_BOARD_SNAPSHOT_CHARS {
+        board_text.truncate(REPORT_MAX_BOARD_SNAPSHOT_CHARS);
+        board_text.push_str(
+            "\n... ; <truncated board snapshot, rerun `board-as-string` command for full board text>\n",
+        );
+    }
+    out.push_str(&board_text);
     out.push_str("\n```\n\n");
 
     out.push_str("## Proto Coverage (Board Read)\n\n");
@@ -954,13 +1263,13 @@ fn proto_coverage_board_read_rows() -> Vec<(&'static str, &'static str, &'static
         ),
         (
             "kiapi.board.commands.GetPadShapeAsPolygon",
-            "not-yet",
-            "pending",
+            "implemented",
+            "get_pad_shape_as_polygon/get_pad_shape_as_polygon_debug",
         ),
         (
             "kiapi.board.commands.CheckPadstackPresenceOnLayers",
-            "not-yet",
-            "pending",
+            "implemented",
+            "check_padstack_presence_on_layers/check_padstack_presence_on_layers_debug",
         ),
         (
             "kiapi.board.commands.GetVisibleLayers",
@@ -1023,6 +1332,44 @@ fn proto_coverage_board_read_rows() -> Vec<(&'static str, &'static str, &'static
             "get_selection_as_string",
         ),
     ]
+}
+
+#[derive(Default)]
+struct PolygonGeometrySummary {
+    outline_nodes: usize,
+    hole_count: usize,
+    hole_nodes_total: usize,
+    point_nodes: usize,
+    arc_nodes: usize,
+}
+
+fn polygon_geometry_summary(polygon: &kicad_ipc::PolygonWithHolesNm) -> PolygonGeometrySummary {
+    let mut summary = PolygonGeometrySummary {
+        hole_count: polygon.holes.len(),
+        ..PolygonGeometrySummary::default()
+    };
+
+    if let Some(outline) = polygon.outline.as_ref() {
+        summary.outline_nodes = outline.nodes.len();
+        for node in &outline.nodes {
+            match node {
+                kicad_ipc::PolyLineNodeGeometryNm::Point(_) => summary.point_nodes += 1,
+                kicad_ipc::PolyLineNodeGeometryNm::Arc(_) => summary.arc_nodes += 1,
+            }
+        }
+    }
+
+    for hole in &polygon.holes {
+        summary.hole_nodes_total += hole.nodes.len();
+        for node in &hole.nodes {
+            match node {
+                kicad_ipc::PolyLineNodeGeometryNm::Point(_) => summary.point_nodes += 1,
+                kicad_ipc::PolyLineNodeGeometryNm::Arc(_) => summary.arc_nodes += 1,
+            }
+        }
+    }
+
+    summary
 }
 
 fn parse_item_ids(args: &[String], command_name: &str) -> Result<Vec<String>, KiCadError> {

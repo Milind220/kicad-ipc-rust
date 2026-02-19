@@ -143,6 +143,18 @@ Dump raw payloads for all PCB object classes:
 cargo run --bin kicad-ipc-cli -- items-raw-all-pcb --debug
 ```
 
+Check whether pads/vias have flashed padstack shapes on specific layers:
+
+```bash
+cargo run --bin kicad-ipc-cli -- padstack-presence --item-id <uuid> --layer-id 3 --layer-id 34 --debug
+```
+
+Get polygonized pad shape(s) on a specific layer:
+
+```bash
+cargo run --bin kicad-ipc-cli -- pad-shape-polygon --pad-id <uuid> --layer-id 3 --debug
+```
+
 Dump board text (KiCad s-expression):
 
 ```bash
@@ -184,8 +196,12 @@ cargo run --bin kicad-ipc-cli -- proto-coverage-board-read
 Generate full board-read reconstruction markdown report:
 
 ```bash
-cargo run --bin kicad-ipc-cli -- board-read-report --out docs/BOARD_READ_REPORT.md
+cargo run --bin kicad-ipc-cli -- --timeout-ms 60000 board-read-report --out docs/BOARD_READ_REPORT.md
 ```
+
+Notes:
+- Report output is intentionally capped for very large boards to avoid multi-GB files.
+- For full raw payloads, use targeted commands such as `items-raw --debug`, `pad-shape-polygon --debug`, and `padstack-presence --debug`.
 
 Get current project path (derived from open PCB docs):
 

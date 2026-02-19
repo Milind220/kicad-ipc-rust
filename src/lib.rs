@@ -21,7 +21,9 @@ pub(crate) mod proto;
 pub use crate::client::{ClientBuilder, KiCadClient};
 pub use crate::error::KiCadError;
 pub use crate::model::board::{
-    BoardEnabledLayers, BoardLayerInfo, BoardNet, BoardOriginKind, PadNetEntry, Vector2Nm,
+    ArcStartMidEndNm, BoardEnabledLayers, BoardLayerInfo, BoardNet, BoardOriginKind, PadNetEntry,
+    PadShapeAsPolygonEntry, PadstackPresenceEntry, PolyLineNm, PolyLineNodeGeometryNm,
+    PolygonWithHolesNm, Vector2Nm,
 };
 pub use crate::model::common::{
     DocumentSpecifier, DocumentType, ItemBoundingBox, ItemHitTestResult, PcbObjectTypeCode,

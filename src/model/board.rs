@@ -63,6 +63,47 @@ pub struct PadNetEntry {
     pub net_name: Option<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ArcStartMidEndNm {
+    pub start: Vector2Nm,
+    pub mid: Vector2Nm,
+    pub end: Vector2Nm,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PolyLineNodeGeometryNm {
+    Point(Vector2Nm),
+    Arc(ArcStartMidEndNm),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PolyLineNm {
+    pub nodes: Vec<PolyLineNodeGeometryNm>,
+    pub closed: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PolygonWithHolesNm {
+    pub outline: Option<PolyLineNm>,
+    pub holes: Vec<PolyLineNm>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PadShapeAsPolygonEntry {
+    pub pad_id: String,
+    pub layer_id: i32,
+    pub layer_name: String,
+    pub polygon: PolygonWithHolesNm,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PadstackPresenceEntry {
+    pub item_id: String,
+    pub layer_id: i32,
+    pub layer_name: String,
+    pub presence: String,
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;

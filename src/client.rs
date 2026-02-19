@@ -6,7 +6,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::envelope;
 use crate::error::KiCadError;
 use crate::model::board::{
-    BoardEnabledLayers, BoardLayerInfo, BoardNet, BoardOriginKind, PadNetEntry, Vector2Nm,
+    ArcStartMidEndNm, BoardEnabledLayers, BoardLayerInfo, BoardNet, BoardOriginKind, PadNetEntry,
+    PadShapeAsPolygonEntry, PadstackPresenceEntry, PolyLineNm, PolyLineNodeGeometryNm,
+    PolygonWithHolesNm, Vector2Nm,
 };
 use crate::model::common::{
     DocumentSpecifier, DocumentType, ItemBoundingBox, ItemHitTestResult, PcbObjectTypeCode,
@@ -37,6 +39,9 @@ const CMD_GET_BOARD_EDITOR_APPEARANCE_SETTINGS: &str =
 const CMD_GET_ITEMS_BY_NET: &str = "kiapi.board.commands.GetItemsByNet";
 const CMD_GET_ITEMS_BY_NET_CLASS: &str = "kiapi.board.commands.GetItemsByNetClass";
 const CMD_GET_NETCLASS_FOR_NETS: &str = "kiapi.board.commands.GetNetClassForNets";
+const CMD_GET_PAD_SHAPE_AS_POLYGON: &str = "kiapi.board.commands.GetPadShapeAsPolygon";
+const CMD_CHECK_PADSTACK_PRESENCE_ON_LAYERS: &str =
+    "kiapi.board.commands.CheckPadstackPresenceOnLayers";
 const CMD_GET_SELECTION: &str = "kiapi.common.commands.GetSelection";
 const CMD_GET_ITEMS: &str = "kiapi.common.commands.GetItems";
 const CMD_GET_ITEMS_BY_ID: &str = "kiapi.common.commands.GetItemsById";
@@ -57,6 +62,8 @@ const RES_GRAPHICS_DEFAULTS_RESPONSE: &str = "kiapi.board.commands.GraphicsDefau
 const RES_BOARD_EDITOR_APPEARANCE_SETTINGS: &str =
     "kiapi.board.commands.BoardEditorAppearanceSettings";
 const RES_NETCLASS_FOR_NETS_RESPONSE: &str = "kiapi.board.commands.NetClassForNetsResponse";
+const RES_PAD_SHAPE_AS_POLYGON_RESPONSE: &str = "kiapi.board.commands.PadShapeAsPolygonResponse";
+const RES_PADSTACK_PRESENCE_RESPONSE: &str = "kiapi.board.commands.PadstackPresenceResponse";
 const RES_VECTOR2: &str = "kiapi.common.types.Vector2";
 const RES_SELECTION_RESPONSE: &str = "kiapi.common.commands.SelectionResponse";
 const RES_GET_ITEMS_RESPONSE: &str = "kiapi.common.commands.GetItemsResponse";
@@ -65,6 +72,8 @@ const RES_HIT_TEST_RESPONSE: &str = "kiapi.common.commands.HitTestResponse";
 const RES_TITLE_BLOCK_INFO: &str = "kiapi.common.types.TitleBlockInfo";
 const RES_SAVED_DOCUMENT_RESPONSE: &str = "kiapi.common.commands.SavedDocumentResponse";
 const RES_SAVED_SELECTION_RESPONSE: &str = "kiapi.common.commands.SavedSelectionResponse";
+
+const PAD_QUERY_CHUNK_SIZE: usize = 256;
 
 const PCB_OBJECT_TYPES: [PcbObjectTypeCode; 18] = [
     PcbObjectTypeCode {
@@ -563,6 +572,126 @@ impl KiCadClient {
         Ok(format!("{:#?}", payload.classes))
     }
 
+    pub async fn get_pad_shape_as_polygon(
+        &self,
+        pad_ids: Vec<String>,
+        layer_id: i32,
+    ) -> Result<Vec<PadShapeAsPolygonEntry>, KiCadError> {
+        if pad_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let board = self.current_board_document_proto().await?;
+        let mut entries = Vec::new();
+        let layer_name = layer_to_model(layer_id).name;
+
+        for chunk in pad_ids.chunks(PAD_QUERY_CHUNK_SIZE) {
+            let payload = self
+                .request_pad_shape_as_polygon(&board, chunk, layer_id)
+                .await?;
+
+            if payload.pads.len() != payload.polygons.len() {
+                return Err(KiCadError::InvalidResponse {
+                    reason: format!(
+                        "GetPadShapeAsPolygon returned mismatched arrays: pads={}, polygons={}",
+                        payload.pads.len(),
+                        payload.polygons.len()
+                    ),
+                });
+            }
+
+            for (pad, polygon) in payload.pads.into_iter().zip(payload.polygons.into_iter()) {
+                entries.push(PadShapeAsPolygonEntry {
+                    pad_id: pad.value,
+                    layer_id,
+                    layer_name: layer_name.clone(),
+                    polygon: map_polygon_with_holes(polygon)?,
+                });
+            }
+        }
+
+        Ok(entries)
+    }
+
+    pub async fn get_pad_shape_as_polygon_debug(
+        &self,
+        pad_ids: Vec<String>,
+        layer_id: i32,
+    ) -> Result<String, KiCadError> {
+        if pad_ids.is_empty() {
+            return Ok("PadShapeAsPolygonResponse { pads: [], polygons: [] }".to_string());
+        }
+
+        let board = self.current_board_document_proto().await?;
+        let mut debug_chunks = Vec::new();
+        for chunk in pad_ids.chunks(PAD_QUERY_CHUNK_SIZE) {
+            let payload = self
+                .request_pad_shape_as_polygon(&board, chunk, layer_id)
+                .await?;
+            debug_chunks.push(format!("{:#?}", payload));
+        }
+
+        Ok(debug_chunks.join("\n\n"))
+    }
+
+    pub async fn check_padstack_presence_on_layers(
+        &self,
+        item_ids: Vec<String>,
+        layer_ids: Vec<i32>,
+    ) -> Result<Vec<PadstackPresenceEntry>, KiCadError> {
+        if item_ids.is_empty() || layer_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let board = self.current_board_document_proto().await?;
+        let mut entries = Vec::new();
+        for chunk in item_ids.chunks(PAD_QUERY_CHUNK_SIZE) {
+            let payload = self
+                .request_padstack_presence_on_layers(&board, chunk, &layer_ids)
+                .await?;
+            for row in payload.entries {
+                let item = row.item.ok_or_else(|| KiCadError::InvalidResponse {
+                    reason: "PadstackPresenceEntry missing item id".to_string(),
+                })?;
+
+                let layer = layer_to_model(row.layer);
+                let presence = board_commands::PadstackPresence::try_from(row.presence)
+                    .map(|value| value.as_str_name().to_string())
+                    .unwrap_or_else(|_| format!("UNKNOWN({})", row.presence));
+
+                entries.push(PadstackPresenceEntry {
+                    item_id: item.value,
+                    layer_id: row.layer,
+                    layer_name: layer.name,
+                    presence,
+                });
+            }
+        }
+
+        Ok(entries)
+    }
+
+    pub async fn check_padstack_presence_on_layers_debug(
+        &self,
+        item_ids: Vec<String>,
+        layer_ids: Vec<i32>,
+    ) -> Result<String, KiCadError> {
+        if item_ids.is_empty() || layer_ids.is_empty() {
+            return Ok("PadstackPresenceResponse { entries: [] }".to_string());
+        }
+
+        let board = self.current_board_document_proto().await?;
+        let mut debug_chunks = Vec::new();
+        for chunk in item_ids.chunks(PAD_QUERY_CHUNK_SIZE) {
+            let payload = self
+                .request_padstack_presence_on_layers(&board, chunk, &layer_ids)
+                .await?;
+            debug_chunks.push(format!("{:#?}", payload));
+        }
+
+        Ok(debug_chunks.join("\n\n"))
+    }
+
     pub async fn get_board_stackup_debug(&self) -> Result<String, KiCadError> {
         let command = board_commands::GetBoardStackup {
             board: Some(self.current_board_document_proto().await?),
@@ -825,6 +954,55 @@ impl KiCadClient {
         ensure_item_request_ok(payload.status)?;
         Ok(payload.items)
     }
+
+    async fn request_pad_shape_as_polygon(
+        &self,
+        board: &common_types::DocumentSpecifier,
+        pad_ids: &[String],
+        layer_id: i32,
+    ) -> Result<board_commands::PadShapeAsPolygonResponse, KiCadError> {
+        let command = board_commands::GetPadShapeAsPolygon {
+            board: Some(board.clone()),
+            pads: pad_ids
+                .iter()
+                .cloned()
+                .map(|value| common_types::Kiid { value })
+                .collect(),
+            layer: layer_id,
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_GET_PAD_SHAPE_AS_POLYGON))
+            .await?;
+
+        envelope::unpack_any(&response, RES_PAD_SHAPE_AS_POLYGON_RESPONSE)
+    }
+
+    async fn request_padstack_presence_on_layers(
+        &self,
+        board: &common_types::DocumentSpecifier,
+        item_ids: &[String],
+        layer_ids: &[i32],
+    ) -> Result<board_commands::PadstackPresenceResponse, KiCadError> {
+        let command = board_commands::CheckPadstackPresenceOnLayers {
+            board: Some(board.clone()),
+            items: item_ids
+                .iter()
+                .cloned()
+                .map(|value| common_types::Kiid { value })
+                .collect(),
+            layers: layer_ids.to_vec(),
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(
+                &command,
+                CMD_CHECK_PADSTACK_PRESENCE_ON_LAYERS,
+            ))
+            .await?;
+
+        envelope::unpack_any(&response, RES_PADSTACK_PRESENCE_RESPONSE)
+    }
 }
 
 fn map_document_specifier(source: common_types::DocumentSpecifier) -> Option<DocumentSpecifier> {
@@ -976,6 +1154,66 @@ fn map_hit_test_result(value: i32) -> ItemHitTestResult {
         common_commands::HitTestResult::HtrHit => ItemHitTestResult::Hit,
         common_commands::HitTestResult::HtrNoHit => ItemHitTestResult::NoHit,
         common_commands::HitTestResult::HtrUnknown => ItemHitTestResult::Unknown,
+    }
+}
+
+fn map_polygon_with_holes(
+    polygon: common_types::PolygonWithHoles,
+) -> Result<PolygonWithHolesNm, KiCadError> {
+    Ok(PolygonWithHolesNm {
+        outline: polygon.outline.map(map_polyline).transpose()?,
+        holes: polygon
+            .holes
+            .into_iter()
+            .map(map_polyline)
+            .collect::<Result<Vec<_>, _>>()?,
+    })
+}
+
+fn map_polyline(line: common_types::PolyLine) -> Result<PolyLineNm, KiCadError> {
+    Ok(PolyLineNm {
+        nodes: line
+            .nodes
+            .into_iter()
+            .map(map_polyline_node)
+            .collect::<Result<Vec<_>, _>>()?,
+        closed: line.closed,
+    })
+}
+
+fn map_polyline_node(
+    node: common_types::PolyLineNode,
+) -> Result<PolyLineNodeGeometryNm, KiCadError> {
+    match node.geometry {
+        Some(common_types::poly_line_node::Geometry::Point(point)) => {
+            Ok(PolyLineNodeGeometryNm::Point(map_vector2_nm(point)))
+        }
+        Some(common_types::poly_line_node::Geometry::Arc(arc)) => {
+            let start = arc.start.ok_or_else(|| KiCadError::InvalidResponse {
+                reason: "polyline arc node missing start point".to_string(),
+            })?;
+            let mid = arc.mid.ok_or_else(|| KiCadError::InvalidResponse {
+                reason: "polyline arc node missing mid point".to_string(),
+            })?;
+            let end = arc.end.ok_or_else(|| KiCadError::InvalidResponse {
+                reason: "polyline arc node missing end point".to_string(),
+            })?;
+            Ok(PolyLineNodeGeometryNm::Arc(ArcStartMidEndNm {
+                start: map_vector2_nm(start),
+                mid: map_vector2_nm(mid),
+                end: map_vector2_nm(end),
+            }))
+        }
+        None => Err(KiCadError::InvalidResponse {
+            reason: "polyline node has no geometry".to_string(),
+        }),
+    }
+}
+
+fn map_vector2_nm(value: common_types::Vector2) -> Vector2Nm {
+    Vector2Nm {
+        x_nm: value.x_nm,
+        y_nm: value.y_nm,
     }
 }
 
@@ -1473,9 +1711,10 @@ fn default_client_name() -> String {
 mod tests {
     use super::{
         any_to_pretty_debug, ensure_item_request_ok, layer_to_model, map_hit_test_result,
-        map_item_bounding_boxes, model_document_to_proto, normalize_socket_uri,
-        pad_netlist_from_footprint_items, select_single_board_document, select_single_project_path,
-        selection_item_detail, summarize_item_details, summarize_selection, PCB_OBJECT_TYPES,
+        map_item_bounding_boxes, map_polygon_with_holes, model_document_to_proto,
+        normalize_socket_uri, pad_netlist_from_footprint_items, select_single_board_document,
+        select_single_project_path, selection_item_detail, summarize_item_details,
+        summarize_selection, PCB_OBJECT_TYPES,
     };
     use crate::error::KiCadError;
     use crate::model::common::{DocumentSpecifier, DocumentType, ProjectInfo};
@@ -1838,5 +2077,89 @@ mod tests {
             .expect("unknown Any payload type should not fail debug rendering");
         assert!(debug.contains("unparsed_any"));
         assert!(debug.contains("raw_len=4"));
+    }
+
+    #[test]
+    fn map_polygon_with_holes_maps_points_and_arcs() {
+        let polygon = crate::proto::kiapi::common::types::PolygonWithHoles {
+            outline: Some(crate::proto::kiapi::common::types::PolyLine {
+                nodes: vec![
+                    crate::proto::kiapi::common::types::PolyLineNode {
+                        geometry: Some(
+                            crate::proto::kiapi::common::types::poly_line_node::Geometry::Point(
+                                crate::proto::kiapi::common::types::Vector2 { x_nm: 10, y_nm: 20 },
+                            ),
+                        ),
+                    },
+                    crate::proto::kiapi::common::types::PolyLineNode {
+                        geometry: Some(
+                            crate::proto::kiapi::common::types::poly_line_node::Geometry::Arc(
+                                crate::proto::kiapi::common::types::ArcStartMidEnd {
+                                    start: Some(crate::proto::kiapi::common::types::Vector2 {
+                                        x_nm: 0,
+                                        y_nm: 0,
+                                    }),
+                                    mid: Some(crate::proto::kiapi::common::types::Vector2 {
+                                        x_nm: 5,
+                                        y_nm: 5,
+                                    }),
+                                    end: Some(crate::proto::kiapi::common::types::Vector2 {
+                                        x_nm: 10,
+                                        y_nm: 0,
+                                    }),
+                                },
+                            ),
+                        ),
+                    },
+                ],
+                closed: true,
+            }),
+            holes: vec![crate::proto::kiapi::common::types::PolyLine {
+                nodes: vec![crate::proto::kiapi::common::types::PolyLineNode {
+                    geometry: Some(
+                        crate::proto::kiapi::common::types::poly_line_node::Geometry::Point(
+                            crate::proto::kiapi::common::types::Vector2 { x_nm: 1, y_nm: 1 },
+                        ),
+                    ),
+                }],
+                closed: true,
+            }],
+        };
+
+        let mapped = map_polygon_with_holes(polygon).expect("polygon mapping should succeed");
+        let outline = mapped.outline.expect("outline should be present");
+        assert_eq!(outline.nodes.len(), 2);
+        assert!(outline.closed);
+        assert_eq!(mapped.holes.len(), 1);
+    }
+
+    #[test]
+    fn map_polygon_with_holes_rejects_missing_arc_points() {
+        let polygon = crate::proto::kiapi::common::types::PolygonWithHoles {
+            outline: Some(crate::proto::kiapi::common::types::PolyLine {
+                nodes: vec![crate::proto::kiapi::common::types::PolyLineNode {
+                    geometry: Some(
+                        crate::proto::kiapi::common::types::poly_line_node::Geometry::Arc(
+                            crate::proto::kiapi::common::types::ArcStartMidEnd {
+                                start: Some(crate::proto::kiapi::common::types::Vector2 {
+                                    x_nm: 0,
+                                    y_nm: 0,
+                                }),
+                                mid: None,
+                                end: Some(crate::proto::kiapi::common::types::Vector2 {
+                                    x_nm: 10,
+                                    y_nm: 0,
+                                }),
+                            },
+                        ),
+                    ),
+                }],
+                closed: false,
+            }),
+            holes: Vec::new(),
+        };
+
+        let err = map_polygon_with_holes(polygon).expect_err("missing arc point must fail");
+        assert!(matches!(err, KiCadError::InvalidResponse { .. }));
     }
 }
