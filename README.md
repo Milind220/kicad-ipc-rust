@@ -36,6 +36,7 @@ Deferred manual/runtime verification (implemented after 2026-02-20 while user un
 - `GetKiCadBinaryPath`
 - `GetPluginSettingsPath`
 - `SaveDocument`
+- `SaveCopyOfDocument`
 
 ## KiCad v10 RC1.1 API Completion Matrix
 
@@ -56,11 +57,11 @@ Legend:
 | Section | Proto Commands | Implemented | Coverage |
 | --- | ---: | ---: | ---: |
 | Common (base) | 6 | 6 | 100% |
-| Common editor/document | 23 | 16 | 70% |
+| Common editor/document | 23 | 17 | 74% |
 | Project manager | 5 | 3 | 60% |
 | Board editor (PCB) | 22 | 20 | 91% |
 | Schematic editor (dedicated proto commands) | 0 | 0 | n/a |
-| **Total** | **56** | **45** | **80%** |
+| **Total** | **56** | **46** | **82%** |
 
 ### Common (base)
 
@@ -80,7 +81,7 @@ Legend:
 | `RefreshEditor` | Implemented | `KiCadClient::refresh_editor` |
 | `GetOpenDocuments` | Implemented | `KiCadClient::get_open_documents`, `KiCadClient::get_current_project_path`, `KiCadClient::has_open_board` |
 | `SaveDocument` | Implemented | `KiCadClient::save_document_raw`, `KiCadClient::save_document` |
-| `SaveCopyOfDocument` | Not yet | - |
+| `SaveCopyOfDocument` | Implemented | `KiCadClient::save_copy_of_document_raw`, `KiCadClient::save_copy_of_document` |
 | `RevertDocument` | Not yet | - |
 | `RunAction` | Not yet | - |
 | `BeginCommit` | Implemented | `KiCadClient::begin_commit_raw`, `KiCadClient::begin_commit` |

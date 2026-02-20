@@ -81,6 +81,7 @@ const CMD_GET_BOUNDING_BOX: &str = "kiapi.common.commands.GetBoundingBox";
 const CMD_HIT_TEST: &str = "kiapi.common.commands.HitTest";
 const CMD_GET_TITLE_BLOCK_INFO: &str = "kiapi.common.commands.GetTitleBlockInfo";
 const CMD_SAVE_DOCUMENT: &str = "kiapi.common.commands.SaveDocument";
+const CMD_SAVE_COPY_OF_DOCUMENT: &str = "kiapi.common.commands.SaveCopyOfDocument";
 const CMD_SAVE_DOCUMENT_TO_STRING: &str = "kiapi.common.commands.SaveDocumentToString";
 const CMD_SAVE_SELECTION_TO_STRING: &str = "kiapi.common.commands.SaveSelectionToString";
 
@@ -1388,6 +1389,39 @@ impl KiCadClient {
 
     pub async fn save_document(&self) -> Result<(), KiCadError> {
         let _ = self.save_document_raw().await?;
+        Ok(())
+    }
+
+    pub async fn save_copy_of_document_raw(
+        &self,
+        path: impl Into<String>,
+        overwrite: bool,
+        include_project: bool,
+    ) -> Result<prost_types::Any, KiCadError> {
+        let command = common_commands::SaveCopyOfDocument {
+            document: Some(self.current_board_document_proto().await?),
+            path: path.into(),
+            options: Some(common_commands::SaveOptions {
+                overwrite,
+                include_project,
+            }),
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_SAVE_COPY_OF_DOCUMENT))
+            .await?;
+        response_payload_as_any(response, RES_PROTOBUF_EMPTY)
+    }
+
+    pub async fn save_copy_of_document(
+        &self,
+        path: impl Into<String>,
+        overwrite: bool,
+        include_project: bool,
+    ) -> Result<(), KiCadError> {
+        let _ = self
+            .save_copy_of_document_raw(path, overwrite, include_project)
+            .await?;
         Ok(())
     }
 
