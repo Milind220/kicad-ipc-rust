@@ -20,12 +20,26 @@ fn collect_proto_files(root: &Path, out: &mut Vec<PathBuf>) -> io::Result<()> {
 }
 
 fn main() {
-    let proto_root = PathBuf::from("proto");
+    let proto_root = std::env::var_os("KICAD_PROTO_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("kicad/api/proto"));
+
+    if !proto_root.exists() {
+        panic!(
+            "KiCad proto root not found at '{}'. Initialize submodule with `git submodule update --init --recursive` or set KICAD_PROTO_ROOT.",
+            proto_root.display()
+        );
+    }
+
     println!("cargo:rerun-if-changed={}", proto_root.display());
 
     let mut proto_files = Vec::new();
-    collect_proto_files(&proto_root, &mut proto_files)
-        .expect("failed to enumerate proto files under ./proto");
+    collect_proto_files(&proto_root, &mut proto_files).unwrap_or_else(|err| {
+        panic!(
+            "failed to enumerate proto files under {}: {err}",
+            proto_root.display()
+        )
+    });
 
     proto_files.sort();
 

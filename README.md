@@ -13,6 +13,22 @@ Alpha. `v0.1.0` release candidate.
 - Real-world user testing: still limited.
 - Issues and PRs welcome.
 
+## Build Inputs
+
+This crate compiles protobuf definitions from a KiCad git submodule:
+
+```bash
+git submodule update --init --recursive
+```
+
+Default proto root: `kicad/api/proto`
+
+Optional override:
+
+```bash
+KICAD_PROTO_ROOT=/absolute/path/to/api/proto cargo build
+```
+
 ## Local Testing
 
 - CLI runbook: `/Users/milindsharma/Developer/kicad-oss/kicad-ipc-rust/docs/TEST_CLI.md`
@@ -130,7 +146,7 @@ Legend:
 
 | Item | Value |
 | --- | --- |
-| Dedicated commands in `proto/schematic/schematic_commands.proto` | None in current proto snapshot |
+| Dedicated commands in `kicad/api/proto/schematic/schematic_commands.proto` | None in current proto snapshot |
 | Coverage | n/a |
 
 ### Symbol editor

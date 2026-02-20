@@ -11,7 +11,8 @@ keywords = ["kicad", "eda", "pcb", "ipc"]
 categories = ["api-bindings", "asynchronous"]
 include = [
     "/src/**",
-    "/proto/**",
+    "/kicad/api/proto/**",
+    "/.gitmodules",
     "/build.rs",
     "/README.md",
     "/LICENSE",
