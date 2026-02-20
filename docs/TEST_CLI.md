@@ -71,6 +71,12 @@ Measure text extents:
 cargo run --bin kicad-ipc-cli -- text-extents --text "R1"
 ```
 
+Convert text to shape primitives:
+
+```bash
+cargo run --bin kicad-ipc-cli -- text-as-shapes --text "R1" --text "C5"
+```
+
 List enabled board layers:
 
 ```bash

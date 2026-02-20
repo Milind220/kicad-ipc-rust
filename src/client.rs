@@ -19,9 +19,9 @@ use crate::model::board::{
 };
 use crate::model::common::{
     DocumentSpecifier, DocumentType, ItemBoundingBox, ItemHitTestResult, PcbObjectTypeCode,
-    ProjectInfo, SelectionItemDetail, SelectionSummary, SelectionTypeCount, TextAttributesSpec,
-    TextExtents, TextHorizontalAlignment, TextSpec, TextVerticalAlignment, TitleBlockInfo,
-    VersionInfo,
+    ProjectInfo, SelectionItemDetail, SelectionSummary, SelectionTypeCount, TextAsShapesEntry,
+    TextAttributesSpec, TextBoxSpec, TextExtents, TextHorizontalAlignment, TextObjectSpec,
+    TextShape, TextShapeGeometry, TextSpec, TextVerticalAlignment, TitleBlockInfo, VersionInfo,
 };
 use crate::proto::kiapi::board as board_proto;
 use crate::proto::kiapi::board::commands as board_commands;
@@ -40,6 +40,7 @@ const CMD_GET_NET_CLASSES: &str = "kiapi.common.commands.GetNetClasses";
 const CMD_GET_TEXT_VARIABLES: &str = "kiapi.common.commands.GetTextVariables";
 const CMD_EXPAND_TEXT_VARIABLES: &str = "kiapi.common.commands.ExpandTextVariables";
 const CMD_GET_TEXT_EXTENTS: &str = "kiapi.common.commands.GetTextExtents";
+const CMD_GET_TEXT_AS_SHAPES: &str = "kiapi.common.commands.GetTextAsShapes";
 const CMD_GET_OPEN_DOCUMENTS: &str = "kiapi.common.commands.GetOpenDocuments";
 const CMD_GET_NETS: &str = "kiapi.board.commands.GetNets";
 const CMD_GET_BOARD_ENABLED_LAYERS: &str = "kiapi.board.commands.GetBoardEnabledLayers";
@@ -71,6 +72,7 @@ const RES_TEXT_VARIABLES: &str = "kiapi.common.project.TextVariables";
 const RES_EXPAND_TEXT_VARIABLES_RESPONSE: &str =
     "kiapi.common.commands.ExpandTextVariablesResponse";
 const RES_BOX2: &str = "kiapi.common.types.Box2";
+const RES_GET_TEXT_AS_SHAPES_RESPONSE: &str = "kiapi.common.commands.GetTextAsShapesResponse";
 const RES_GET_OPEN_DOCUMENTS: &str = "kiapi.common.commands.GetOpenDocumentsResponse";
 const RES_GET_NETS: &str = "kiapi.board.commands.NetsResponse";
 const RES_GET_BOARD_ENABLED_LAYERS: &str = "kiapi.board.commands.BoardEnabledLayersResponse";
@@ -420,6 +422,34 @@ impl KiCadClient {
             width_nm: size.x_nm,
             height_nm: size.y_nm,
         })
+    }
+
+    pub async fn get_text_as_shapes_raw(
+        &self,
+        text: Vec<TextObjectSpec>,
+    ) -> Result<prost_types::Any, KiCadError> {
+        let command = common_commands::GetTextAsShapes {
+            text: text.into_iter().map(text_object_spec_to_proto).collect(),
+        };
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_GET_TEXT_AS_SHAPES))
+            .await?;
+        response_payload_as_any(response, RES_GET_TEXT_AS_SHAPES_RESPONSE)
+    }
+
+    pub async fn get_text_as_shapes(
+        &self,
+        text: Vec<TextObjectSpec>,
+    ) -> Result<Vec<TextAsShapesEntry>, KiCadError> {
+        let payload = self.get_text_as_shapes_raw(text).await?;
+        let response: common_commands::GetTextAsShapesResponse =
+            decode_any(&payload, RES_GET_TEXT_AS_SHAPES_RESPONSE)?;
+
+        response
+            .text_with_shapes
+            .into_iter()
+            .map(map_text_with_shapes)
+            .collect()
     }
 
     pub async fn get_current_project_path(&self) -> Result<PathBuf, KiCadError> {
@@ -1284,6 +1314,191 @@ fn text_vertical_alignment_to_proto(value: TextVerticalAlignment) -> i32 {
             common_types::VerticalAlignment::VaIndeterminate as i32
         }
     }
+}
+
+fn text_box_spec_to_proto(text: TextBoxSpec) -> common_types::TextBox {
+    common_types::TextBox {
+        top_left: text.top_left_nm.map(vector2_nm_to_proto),
+        bottom_right: text.bottom_right_nm.map(vector2_nm_to_proto),
+        attributes: text.attributes.map(text_attributes_spec_to_proto),
+        text: text.text,
+    }
+}
+
+fn text_object_spec_to_proto(text: TextObjectSpec) -> common_commands::TextOrTextBox {
+    let inner = match text {
+        TextObjectSpec::Text(value) => {
+            common_commands::text_or_text_box::Inner::Text(text_spec_to_proto(value))
+        }
+        TextObjectSpec::TextBox(value) => {
+            common_commands::text_or_text_box::Inner::Textbox(text_box_spec_to_proto(value))
+        }
+    };
+    common_commands::TextOrTextBox { inner: Some(inner) }
+}
+
+fn map_text_horizontal_alignment_from_proto(value: i32) -> TextHorizontalAlignment {
+    match common_types::HorizontalAlignment::try_from(value) {
+        Ok(common_types::HorizontalAlignment::HaLeft) => TextHorizontalAlignment::Left,
+        Ok(common_types::HorizontalAlignment::HaCenter) => TextHorizontalAlignment::Center,
+        Ok(common_types::HorizontalAlignment::HaRight) => TextHorizontalAlignment::Right,
+        Ok(common_types::HorizontalAlignment::HaIndeterminate) => {
+            TextHorizontalAlignment::Indeterminate
+        }
+        _ => TextHorizontalAlignment::Unknown,
+    }
+}
+
+fn map_text_vertical_alignment_from_proto(value: i32) -> TextVerticalAlignment {
+    match common_types::VerticalAlignment::try_from(value) {
+        Ok(common_types::VerticalAlignment::VaTop) => TextVerticalAlignment::Top,
+        Ok(common_types::VerticalAlignment::VaCenter) => TextVerticalAlignment::Center,
+        Ok(common_types::VerticalAlignment::VaBottom) => TextVerticalAlignment::Bottom,
+        Ok(common_types::VerticalAlignment::VaIndeterminate) => {
+            TextVerticalAlignment::Indeterminate
+        }
+        _ => TextVerticalAlignment::Unknown,
+    }
+}
+
+fn map_text_attributes_spec_from_proto(
+    attributes: common_types::TextAttributes,
+) -> TextAttributesSpec {
+    TextAttributesSpec {
+        font_name: if attributes.font_name.is_empty() {
+            None
+        } else {
+            Some(attributes.font_name)
+        },
+        horizontal_alignment: map_text_horizontal_alignment_from_proto(
+            attributes.horizontal_alignment,
+        ),
+        vertical_alignment: map_text_vertical_alignment_from_proto(attributes.vertical_alignment),
+        angle_degrees: attributes.angle.map(|value| value.value_degrees),
+        line_spacing: Some(attributes.line_spacing),
+        stroke_width_nm: map_optional_distance_nm(attributes.stroke_width),
+        italic: attributes.italic,
+        bold: attributes.bold,
+        underlined: attributes.underlined,
+        mirrored: attributes.mirrored,
+        multiline: attributes.multiline,
+        keep_upright: attributes.keep_upright,
+        size_nm: attributes.size.map(map_vector2_nm),
+    }
+}
+
+fn map_text_spec_from_proto(text: common_types::Text) -> TextSpec {
+    TextSpec {
+        text: text.text,
+        position_nm: text.position.map(map_vector2_nm),
+        attributes: text.attributes.map(map_text_attributes_spec_from_proto),
+        hyperlink: if text.hyperlink.is_empty() {
+            None
+        } else {
+            Some(text.hyperlink)
+        },
+    }
+}
+
+fn map_text_box_spec_from_proto(text: common_types::TextBox) -> TextBoxSpec {
+    TextBoxSpec {
+        text: text.text,
+        top_left_nm: text.top_left.map(map_vector2_nm),
+        bottom_right_nm: text.bottom_right.map(map_vector2_nm),
+        attributes: text.attributes.map(map_text_attributes_spec_from_proto),
+    }
+}
+
+fn map_text_object_spec_from_proto(text: common_commands::TextOrTextBox) -> Option<TextObjectSpec> {
+    match text.inner {
+        Some(common_commands::text_or_text_box::Inner::Text(value)) => {
+            Some(TextObjectSpec::Text(map_text_spec_from_proto(value)))
+        }
+        Some(common_commands::text_or_text_box::Inner::Textbox(value)) => {
+            Some(TextObjectSpec::TextBox(map_text_box_spec_from_proto(value)))
+        }
+        None => None,
+    }
+}
+
+fn map_text_shape_geometry(
+    shape: common_types::GraphicShape,
+) -> Result<TextShapeGeometry, KiCadError> {
+    match shape.geometry {
+        Some(common_types::graphic_shape::Geometry::Segment(segment)) => {
+            Ok(TextShapeGeometry::Segment {
+                start_nm: segment.start.map(map_vector2_nm),
+                end_nm: segment.end.map(map_vector2_nm),
+            })
+        }
+        Some(common_types::graphic_shape::Geometry::Rectangle(rectangle)) => {
+            Ok(TextShapeGeometry::Rectangle {
+                top_left_nm: rectangle.top_left.map(map_vector2_nm),
+                bottom_right_nm: rectangle.bottom_right.map(map_vector2_nm),
+                corner_radius_nm: map_optional_distance_nm(rectangle.corner_radius),
+            })
+        }
+        Some(common_types::graphic_shape::Geometry::Arc(arc)) => Ok(TextShapeGeometry::Arc {
+            start_nm: arc.start.map(map_vector2_nm),
+            mid_nm: arc.mid.map(map_vector2_nm),
+            end_nm: arc.end.map(map_vector2_nm),
+        }),
+        Some(common_types::graphic_shape::Geometry::Circle(circle)) => {
+            Ok(TextShapeGeometry::Circle {
+                center_nm: circle.center.map(map_vector2_nm),
+                radius_point_nm: circle.radius_point.map(map_vector2_nm),
+            })
+        }
+        Some(common_types::graphic_shape::Geometry::Polygon(polygon)) => {
+            let polygons = polygon
+                .polygons
+                .into_iter()
+                .map(map_polygon_with_holes)
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(TextShapeGeometry::Polygon { polygons })
+        }
+        Some(common_types::graphic_shape::Geometry::Bezier(bezier)) => {
+            Ok(TextShapeGeometry::Bezier {
+                start_nm: bezier.start.map(map_vector2_nm),
+                control1_nm: bezier.control1.map(map_vector2_nm),
+                control2_nm: bezier.control2.map(map_vector2_nm),
+                end_nm: bezier.end.map(map_vector2_nm),
+            })
+        }
+        None => Ok(TextShapeGeometry::Unknown),
+    }
+}
+
+fn map_text_shape(shape: common_types::GraphicShape) -> Result<TextShape, KiCadError> {
+    let geometry = map_text_shape_geometry(shape.clone())?;
+    let attributes = shape.attributes.unwrap_or_default();
+    let stroke = attributes.stroke;
+    let fill = attributes.fill;
+
+    Ok(TextShape {
+        geometry,
+        stroke_width_nm: stroke
+            .clone()
+            .and_then(|value| map_optional_distance_nm(value.width)),
+        stroke_style: stroke.as_ref().map(|value| value.style),
+        stroke_color: stroke.and_then(|value| map_optional_color(value.color)),
+        fill_type: fill.as_ref().map(|value| value.fill_type),
+        fill_color: fill.and_then(|value| map_optional_color(value.color)),
+    })
+}
+
+fn map_text_with_shapes(
+    row: common_commands::TextWithShapes,
+) -> Result<TextAsShapesEntry, KiCadError> {
+    let source = row.text.and_then(map_text_object_spec_from_proto);
+    let shapes = row
+        .shapes
+        .unwrap_or_default()
+        .shapes
+        .into_iter()
+        .map(map_text_shape)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(TextAsShapesEntry { source, shapes })
 }
 
 fn layer_to_model(layer_id: i32) -> BoardLayerInfo {

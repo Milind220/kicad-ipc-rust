@@ -38,12 +38,12 @@ Legend:
 
 | Section | Proto Commands | Implemented | Coverage |
 | --- | ---: | ---: | ---: |
-| Common (base) | 6 | 3 | 50% |
+| Common (base) | 6 | 4 | 67% |
 | Common editor/document | 23 | 9 | 39% |
 | Project manager | 5 | 3 | 60% |
 | Board editor (PCB) | 22 | 13 | 59% |
 | Schematic editor (dedicated proto commands) | 0 | 0 | n/a |
-| **Total** | **56** | **28** | **50%** |
+| **Total** | **56** | **29** | **52%** |
 
 ### Common (base)
 
@@ -53,7 +53,7 @@ Legend:
 | `GetVersion` | Implemented | `KiCadClient::get_version` |
 | `GetKiCadBinaryPath` | Not yet | - |
 | `GetTextExtents` | Implemented | `KiCadClient::get_text_extents_raw`, `KiCadClient::get_text_extents` |
-| `GetTextAsShapes` | Not yet | - |
+| `GetTextAsShapes` | Implemented | `KiCadClient::get_text_as_shapes_raw`, `KiCadClient::get_text_as_shapes` |
 | `GetPluginSettingsPath` | Not yet | - |
 
 ### Common editor/document

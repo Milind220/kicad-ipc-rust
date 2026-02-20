@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use crate::model::board::Vector2Nm;
+use crate::model::board::{ColorRgba, PolygonWithHolesNm, Vector2Nm};
 use crate::proto::kiapi::common::types as common_types;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -224,6 +224,68 @@ pub struct TextExtents {
     pub y_nm: i64,
     pub width_nm: i64,
     pub height_nm: i64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextBoxSpec {
+    pub text: String,
+    pub top_left_nm: Option<Vector2Nm>,
+    pub bottom_right_nm: Option<Vector2Nm>,
+    pub attributes: Option<TextAttributesSpec>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum TextObjectSpec {
+    Text(TextSpec),
+    TextBox(TextBoxSpec),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum TextShapeGeometry {
+    Segment {
+        start_nm: Option<Vector2Nm>,
+        end_nm: Option<Vector2Nm>,
+    },
+    Rectangle {
+        top_left_nm: Option<Vector2Nm>,
+        bottom_right_nm: Option<Vector2Nm>,
+        corner_radius_nm: Option<i64>,
+    },
+    Arc {
+        start_nm: Option<Vector2Nm>,
+        mid_nm: Option<Vector2Nm>,
+        end_nm: Option<Vector2Nm>,
+    },
+    Circle {
+        center_nm: Option<Vector2Nm>,
+        radius_point_nm: Option<Vector2Nm>,
+    },
+    Polygon {
+        polygons: Vec<PolygonWithHolesNm>,
+    },
+    Bezier {
+        start_nm: Option<Vector2Nm>,
+        control1_nm: Option<Vector2Nm>,
+        control2_nm: Option<Vector2Nm>,
+        end_nm: Option<Vector2Nm>,
+    },
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextShape {
+    pub geometry: TextShapeGeometry,
+    pub stroke_width_nm: Option<i64>,
+    pub stroke_style: Option<i32>,
+    pub stroke_color: Option<ColorRgba>,
+    pub fill_type: Option<i32>,
+    pub fill_color: Option<ColorRgba>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextAsShapesEntry {
+    pub source: Option<TextObjectSpec>,
+    pub shapes: Vec<TextShape>,
 }
 
 impl std::fmt::Display for ItemHitTestResult {
