@@ -41,9 +41,9 @@ Legend:
 | Common (base) | 6 | 4 | 67% |
 | Common editor/document | 23 | 12 | 52% |
 | Project manager | 5 | 3 | 60% |
-| Board editor (PCB) | 22 | 19 | 86% |
+| Board editor (PCB) | 22 | 20 | 91% |
 | Schematic editor (dedicated proto commands) | 0 | 0 | n/a |
-| **Total** | **56** | **38** | **68%** |
+| **Total** | **56** | **39** | **70%** |
 
 ### Common (base)
 
@@ -109,7 +109,7 @@ Legend:
 | `GetItemsByNet` | Implemented | `KiCadClient::get_items_by_net_raw`, `KiCadClient::get_items_by_net` |
 | `GetItemsByNetClass` | Implemented | `KiCadClient::get_items_by_net_class_raw`, `KiCadClient::get_items_by_net_class` |
 | `GetNetClassForNets` | Implemented | `KiCadClient::get_netclass_for_nets_raw`, `KiCadClient::get_netclass_for_nets` |
-| `RefillZones` | Not yet | - |
+| `RefillZones` | Implemented | `KiCadClient::refill_zones` |
 | `GetPadShapeAsPolygon` | Implemented | `KiCadClient::get_pad_shape_as_polygon_raw`, `KiCadClient::get_pad_shape_as_polygon` |
 | `CheckPadstackPresenceOnLayers` | Implemented | `KiCadClient::check_padstack_presence_on_layers_raw`, `KiCadClient::check_padstack_presence_on_layers` |
 | `InjectDrcError` | Implemented | `KiCadClient::inject_drc_error_raw`, `KiCadClient::inject_drc_error` |

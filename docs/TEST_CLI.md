@@ -267,6 +267,12 @@ Inject DRC marker:
 cargo run --bin kicad-ipc-cli -- inject-drc-error --severity error --message "API marker test" --x-nm 1000000 --y-nm 1000000
 ```
 
+Refill all zones:
+
+```bash
+cargo run --bin kicad-ipc-cli -- refill-zones
+```
+
 Show typed netclass map:
 
 ```bash

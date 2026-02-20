@@ -62,6 +62,7 @@ const CMD_SET_BOARD_EDITOR_APPEARANCE_SETTINGS: &str =
 const CMD_GET_ITEMS_BY_NET: &str = "kiapi.board.commands.GetItemsByNet";
 const CMD_GET_ITEMS_BY_NET_CLASS: &str = "kiapi.board.commands.GetItemsByNetClass";
 const CMD_GET_NETCLASS_FOR_NETS: &str = "kiapi.board.commands.GetNetClassForNets";
+const CMD_REFILL_ZONES: &str = "kiapi.board.commands.RefillZones";
 const CMD_GET_PAD_SHAPE_AS_POLYGON: &str = "kiapi.board.commands.GetPadShapeAsPolygon";
 const CMD_CHECK_PADSTACK_PRESENCE_ON_LAYERS: &str =
     "kiapi.board.commands.CheckPadstackPresenceOnLayers";
@@ -901,6 +902,23 @@ impl KiCadClient {
         let response: board_commands::NetClassForNetsResponse =
             decode_any(&payload, RES_NETCLASS_FOR_NETS_RESPONSE)?;
         Ok(map_netclass_for_nets_response(response))
+    }
+
+    pub async fn refill_zones(&self, zone_ids: Vec<String>) -> Result<(), KiCadError> {
+        let board = self.current_board_document_proto().await?;
+        let command = board_commands::RefillZones {
+            board: Some(board),
+            zones: zone_ids
+                .into_iter()
+                .map(|value| common_types::Kiid { value })
+                .collect(),
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_REFILL_ZONES))
+            .await?;
+        let _ = response_payload_as_any(response, RES_PROTOBUF_EMPTY)?;
+        Ok(())
     }
 
     pub async fn get_pad_shape_as_polygon_raw(
