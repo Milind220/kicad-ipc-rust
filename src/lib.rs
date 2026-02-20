@@ -24,7 +24,7 @@ pub use crate::model::board::{
     ArcStartMidEndNm, BoardEditorAppearanceSettings, BoardEnabledLayers, BoardFlipMode,
     BoardLayerClass, BoardLayerGraphicsDefault, BoardLayerInfo, BoardNet, BoardOriginKind,
     BoardStackup, BoardStackupDielectricProperties, BoardStackupLayer, BoardStackupLayerType,
-    ColorRgba, GraphicsDefaults, InactiveLayerDisplayMode, NetClassBoardSettings,
+    ColorRgba, DrcSeverity, GraphicsDefaults, InactiveLayerDisplayMode, NetClassBoardSettings,
     NetClassForNetEntry, NetClassInfo, NetClassType, NetColorDisplayMode, PadNetEntry,
     PadShapeAsPolygonEntry, PadstackPresenceEntry, PadstackPresenceState, PcbArc,
     PcbBoardGraphicShape, PcbBoardText, PcbBoardTextBox, PcbDimension, PcbField, PcbFootprint,
@@ -33,8 +33,9 @@ pub use crate::model::board::{
     Vector2Nm,
 };
 pub use crate::model::common::{
-    DocumentSpecifier, DocumentType, ItemBoundingBox, ItemHitTestResult, PcbObjectTypeCode,
-    SelectionItemDetail, SelectionSummary, SelectionTypeCount, TextAsShapesEntry,
-    TextAttributesSpec, TextBoxSpec, TextExtents, TextHorizontalAlignment, TextObjectSpec,
-    TextShape, TextShapeGeometry, TextSpec, TextVerticalAlignment, TitleBlockInfo, VersionInfo,
+    CommitAction, CommitSession, DocumentSpecifier, DocumentType, EditorFrameType, ItemBoundingBox,
+    ItemHitTestResult, MapMergeMode, PcbObjectTypeCode, RunActionStatus, SelectionItemDetail,
+    SelectionSummary, SelectionTypeCount, TextAsShapesEntry, TextAttributesSpec, TextBoxSpec,
+    TextExtents, TextHorizontalAlignment, TextObjectSpec, TextShape, TextShapeGeometry, TextSpec,
+    TextVerticalAlignment, TitleBlockInfo, VersionInfo,
 };

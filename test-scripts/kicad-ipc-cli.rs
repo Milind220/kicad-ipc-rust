@@ -6,8 +6,10 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use kicad_ipc::{
-    BoardOriginKind, ClientBuilder, DocumentType, KiCadClient, KiCadError, PadstackPresenceState,
-    PcbObjectTypeCode, TextObjectSpec, TextShapeGeometry, TextSpec, Vector2Nm,
+    BoardFlipMode, BoardOriginKind, ClientBuilder, CommitAction, CommitSession, DocumentType,
+    DrcSeverity, EditorFrameType, InactiveLayerDisplayMode, KiCadClient, KiCadError, MapMergeMode,
+    NetColorDisplayMode, PadstackPresenceState, PcbObjectTypeCode, RatsnestDisplayMode,
+    TextObjectSpec, TextShapeGeometry, TextSpec, Vector2Nm,
 };
 
 const REPORT_MAX_PAD_NET_ROWS: usize = 2_000;
@@ -20,6 +22,7 @@ const REPORT_MAX_BOARD_SNAPSHOT_CHARS: usize = 750_000;
 struct CliConfig {
     socket: Option<String>,
     token: Option<String>,
+    client_name: Option<String>,
     timeout_ms: u64,
 }
 
@@ -27,13 +30,26 @@ struct CliConfig {
 enum Command {
     Ping,
     Version,
+    KiCadBinaryPath {
+        binary_name: String,
+    },
+    PluginSettingsPath {
+        identifier: String,
+    },
     OpenDocs {
         document_type: DocumentType,
     },
     ProjectPath,
     BoardOpen,
     NetClasses,
+    SetNetClasses {
+        merge_mode: MapMergeMode,
+    },
     TextVariables,
+    SetTextVariables {
+        merge_mode: MapMergeMode,
+        variables: BTreeMap<String, String>,
+    },
     ExpandTextVariables {
         text: Vec<String>,
     },
@@ -45,11 +61,72 @@ enum Command {
     },
     Nets,
     EnabledLayers,
+    SetEnabledLayers {
+        copper_layer_count: u32,
+        layer_ids: Vec<i32>,
+    },
     ActiveLayer,
+    SetActiveLayer {
+        layer_id: i32,
+    },
     VisibleLayers,
+    SetVisibleLayers {
+        layer_ids: Vec<i32>,
+    },
     BoardOrigin {
         kind: BoardOriginKind,
     },
+    SetBoardOrigin {
+        kind: BoardOriginKind,
+        x_nm: i64,
+        y_nm: i64,
+    },
+    InjectDrcError {
+        severity: DrcSeverity,
+        message: String,
+        x_nm: Option<i64>,
+        y_nm: Option<i64>,
+        item_ids: Vec<String>,
+    },
+    RefreshEditor {
+        frame: EditorFrameType,
+    },
+    BeginCommit,
+    EndCommit {
+        id: String,
+        action: CommitAction,
+        message: String,
+    },
+    SaveDoc,
+    SaveCopy {
+        path: String,
+        overwrite: bool,
+        include_project: bool,
+    },
+    RevertDoc,
+    RunAction {
+        action: String,
+    },
+    CreateItems {
+        items: Vec<prost_types::Any>,
+        container_id: Option<String>,
+    },
+    UpdateItems {
+        items: Vec<prost_types::Any>,
+    },
+    DeleteItems {
+        item_ids: Vec<String>,
+    },
+    ParseCreateItemsFromString {
+        contents: String,
+    },
+    AddToSelection {
+        item_ids: Vec<String>,
+    },
+    RemoveFromSelection {
+        item_ids: Vec<String>,
+    },
+    ClearSelection,
     SelectionSummary,
     SelectionDetails,
     SelectionRaw,
@@ -89,8 +166,21 @@ enum Command {
     BoardAsString,
     SelectionAsString,
     Stackup,
+    UpdateStackup,
     GraphicsDefaults,
     Appearance,
+    SetAppearance {
+        inactive_layer_display: InactiveLayerDisplayMode,
+        net_color_display: NetColorDisplayMode,
+        board_flip: BoardFlipMode,
+        ratsnest_display: RatsnestDisplayMode,
+    },
+    RefillZones {
+        zone_ids: Vec<String>,
+    },
+    InteractiveMoveItems {
+        item_ids: Vec<String>,
+    },
     NetClass,
     BoardReadReport {
         output: PathBuf,
@@ -141,6 +231,9 @@ async fn run() -> Result<(), KiCadError> {
     if let Some(token) = config.token {
         builder = builder.token(token);
     }
+    if let Some(client_name) = config.client_name {
+        builder = builder.client_name(client_name);
+    }
 
     let client = builder.connect().await?;
 
@@ -155,6 +248,14 @@ async fn run() -> Result<(), KiCadError> {
                 "version: {}.{}.{} ({})",
                 version.major, version.minor, version.patch, version.full_version
             );
+        }
+        Command::KiCadBinaryPath { binary_name } => {
+            let path = client.get_kicad_binary_path(binary_name).await?;
+            println!("kicad_binary_path={path}");
+        }
+        Command::PluginSettingsPath { identifier } => {
+            let path = client.get_plugin_settings_path(identifier).await?;
+            println!("plugin_settings_path={path}");
         }
         Command::OpenDocs { document_type } => {
             let docs = client.get_open_documents(document_type).await?;
@@ -206,10 +307,33 @@ async fn run() -> Result<(), KiCadError> {
                 );
             }
         }
+        Command::SetNetClasses { merge_mode } => {
+            let classes = client.get_net_classes().await?;
+            let updated = client.set_net_classes(classes, merge_mode).await?;
+            println!(
+                "net_class_count={} merge_mode={}",
+                updated.len(),
+                merge_mode
+            );
+        }
         Command::TextVariables => {
             let variables = client.get_text_variables().await?;
             println!("text_variable_count={}", variables.len());
             for (name, value) in variables {
+                println!("name={} value={}", name, value);
+            }
+        }
+        Command::SetTextVariables {
+            merge_mode,
+            variables,
+        } => {
+            let updated = client.set_text_variables(variables, merge_mode).await?;
+            println!(
+                "text_variable_count={} merge_mode={}",
+                updated.len(),
+                merge_mode
+            );
+            for (name, value) in updated {
                 println!("name={} value={}", name, value);
             }
         }
@@ -285,12 +409,28 @@ async fn run() -> Result<(), KiCadError> {
                 println!("layer_id={} layer_name={}", layer.id, layer.name);
             }
         }
+        Command::SetEnabledLayers {
+            copper_layer_count,
+            layer_ids,
+        } => {
+            let enabled = client
+                .set_board_enabled_layers(copper_layer_count, layer_ids)
+                .await?;
+            println!("copper_layer_count={}", enabled.copper_layer_count);
+            for layer in enabled.layers {
+                println!("layer_id={} layer_name={}", layer.id, layer.name);
+            }
+        }
         Command::ActiveLayer => {
             let layer = client.get_active_layer().await?;
             println!(
                 "active_layer_id={} active_layer_name={}",
                 layer.id, layer.name
             );
+        }
+        Command::SetActiveLayer { layer_id } => {
+            client.set_active_layer(layer_id).await?;
+            println!("set_active_layer_id={}", layer_id);
         }
         Command::VisibleLayers => {
             let layers = client.get_visible_layers().await?;
@@ -302,12 +442,145 @@ async fn run() -> Result<(), KiCadError> {
                 }
             }
         }
+        Command::SetVisibleLayers { layer_ids } => {
+            client.set_visible_layers(layer_ids.clone()).await?;
+            println!("set_visible_layer_count={}", layer_ids.len());
+        }
         Command::BoardOrigin { kind } => {
             let origin = client.get_board_origin(kind).await?;
             println!(
                 "origin_kind={} x_nm={} y_nm={}",
                 kind, origin.x_nm, origin.y_nm
             );
+        }
+        Command::SetBoardOrigin { kind, x_nm, y_nm } => {
+            client
+                .set_board_origin(kind, Vector2Nm { x_nm, y_nm })
+                .await?;
+            println!("set_origin_kind={} x_nm={} y_nm={}", kind, x_nm, y_nm);
+        }
+        Command::InjectDrcError {
+            severity,
+            message,
+            x_nm,
+            y_nm,
+            item_ids,
+        } => {
+            let position = match (x_nm, y_nm) {
+                (Some(x_nm), Some(y_nm)) => Some(Vector2Nm { x_nm, y_nm }),
+                _ => None,
+            };
+            let marker = client
+                .inject_drc_error(severity, message, position, item_ids)
+                .await?;
+            println!(
+                "drc_marker_id={}",
+                marker.unwrap_or_else(|| "-".to_string())
+            );
+        }
+        Command::RefreshEditor { frame } => {
+            client.refresh_editor(frame).await?;
+            println!("refresh_editor=ok frame={}", frame);
+        }
+        Command::BeginCommit => {
+            let session = client.begin_commit().await?;
+            println!("commit_id={}", session.id);
+        }
+        Command::EndCommit {
+            id,
+            action,
+            message,
+        } => {
+            client
+                .end_commit(CommitSession { id }, action, message)
+                .await?;
+            println!("end_commit=ok action={}", action);
+        }
+        Command::SaveDoc => {
+            client.save_document().await?;
+            println!("save_document=ok");
+        }
+        Command::SaveCopy {
+            path,
+            overwrite,
+            include_project,
+        } => {
+            client
+                .save_copy_of_document(path, overwrite, include_project)
+                .await?;
+            println!(
+                "save_copy_of_document=ok overwrite={} include_project={}",
+                overwrite, include_project
+            );
+        }
+        Command::RevertDoc => {
+            client.revert_document().await?;
+            println!("revert_document=ok");
+        }
+        Command::RunAction { action } => {
+            let status = client.run_action(action).await?;
+            println!("run_action_status={status:?}");
+        }
+        Command::CreateItems {
+            items,
+            container_id,
+        } => {
+            let created = client.create_items(items, container_id).await?;
+            println!("created_item_count={}", created.len());
+            for (index, item) in created.iter().enumerate() {
+                println!(
+                    "[{index}] type_url={} raw_len={}",
+                    item.type_url,
+                    item.value.len()
+                );
+            }
+        }
+        Command::UpdateItems { items } => {
+            let updated = client.update_items(items).await?;
+            println!("updated_item_count={}", updated.len());
+            for (index, item) in updated.iter().enumerate() {
+                println!(
+                    "[{index}] type_url={} raw_len={}",
+                    item.type_url,
+                    item.value.len()
+                );
+            }
+        }
+        Command::DeleteItems { item_ids } => {
+            let deleted = client.delete_items(item_ids).await?;
+            println!("deleted_item_count={}", deleted.len());
+            for (index, item_id) in deleted.iter().enumerate() {
+                println!("[{index}] id={item_id}");
+            }
+        }
+        Command::ParseCreateItemsFromString { contents } => {
+            let created = client.parse_and_create_items_from_string(contents).await?;
+            println!("created_item_count={}", created.len());
+            for (index, item) in created.iter().enumerate() {
+                println!(
+                    "[{index}] type_url={} raw_len={}",
+                    item.type_url,
+                    item.value.len()
+                );
+            }
+        }
+        Command::AddToSelection { item_ids } => {
+            let summary = client.add_to_selection(item_ids).await?;
+            println!("selection_total={}", summary.total_items);
+            for entry in summary.type_url_counts {
+                println!("type_url={} count={}", entry.type_url, entry.count);
+            }
+        }
+        Command::RemoveFromSelection { item_ids } => {
+            let summary = client.remove_from_selection(item_ids).await?;
+            println!("selection_total={}", summary.total_items);
+            for entry in summary.type_url_counts {
+                println!("type_url={} count={}", entry.type_url, entry.count);
+            }
+        }
+        Command::ClearSelection => {
+            let summary = client.clear_selection().await?;
+            println!("selection_total={}", summary.total_items);
         }
         Command::SelectionSummary => {
             let summary = client.get_selection_summary().await?;
@@ -571,6 +844,11 @@ async fn run() -> Result<(), KiCadError> {
             let stackup = client.get_board_stackup().await?;
             println!("{stackup:#?}");
         }
+        Command::UpdateStackup => {
+            let stackup = client.get_board_stackup().await?;
+            let updated = client.update_board_stackup(stackup).await?;
+            println!("{updated:#?}");
+        }
         Command::GraphicsDefaults => {
             let defaults = client.get_graphics_defaults().await?;
             println!("{defaults:#?}");
@@ -578,6 +856,30 @@ async fn run() -> Result<(), KiCadError> {
         Command::Appearance => {
             let appearance = client.get_board_editor_appearance_settings().await?;
             println!("{appearance:#?}");
+        }
+        Command::SetAppearance {
+            inactive_layer_display,
+            net_color_display,
+            board_flip,
+            ratsnest_display,
+        } => {
+            let updated = client
+                .set_board_editor_appearance_settings(kicad_ipc::BoardEditorAppearanceSettings {
+                    inactive_layer_display,
+                    net_color_display,
+                    board_flip,
+                    ratsnest_display,
+                })
+                .await?;
+            println!("{updated:#?}");
+        }
+        Command::RefillZones { zone_ids } => {
+            client.refill_zones(zone_ids).await?;
+            println!("refill_zones_dispatched=ok");
+        }
+        Command::InteractiveMoveItems { item_ids } => {
+            client.interactive_move_items(item_ids.clone()).await?;
+            println!("interactive_move_item_count={}", item_ids.len());
         }
         Command::NetClass => {
             let nets = client.get_nets().await?;
@@ -610,8 +912,10 @@ async fn run() -> Result<(), KiCadError> {
 }
 
 fn parse_args() -> Result<(CliConfig, Command), KiCadError> {
-    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    parse_args_from(std::env::args().skip(1).collect())
+}
 
+fn parse_args_from(mut args: Vec<String>) -> Result<(CliConfig, Command), KiCadError> {
     if args.is_empty() {
         return Ok((default_config(), Command::Help));
     }
@@ -633,6 +937,13 @@ fn parse_args() -> Result<(CliConfig, Command), KiCadError> {
                     reason: "missing value for --token".to_string(),
                 })?;
                 config.token = Some(value.clone());
+                args.drain(index..=index + 1);
+            }
+            "--client-name" => {
+                let value = args.get(index + 1).ok_or_else(|| KiCadError::Config {
+                    reason: "missing value for --client-name".to_string(),
+                })?;
+                config.client_name = Some(value.clone());
                 args.drain(index..=index + 1);
             }
             "--timeout-ms" => {
@@ -658,10 +969,93 @@ fn parse_args() -> Result<(CliConfig, Command), KiCadError> {
         "help" | "--help" | "-h" => Command::Help,
         "ping" => Command::Ping,
         "version" => Command::Version,
+        "kicad-binary-path" => {
+            let mut binary_name = "kicad-cli".to_string();
+            let mut i = 1;
+            while i < args.len() {
+                if args[i] == "--binary-name" {
+                    let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                        reason: "missing value for kicad-binary-path --binary-name".to_string(),
+                    })?;
+                    binary_name = value.clone();
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+            }
+            Command::KiCadBinaryPath { binary_name }
+        }
+        "plugin-settings-path" => {
+            let mut identifier = "kicad-ipc-rust".to_string();
+            let mut i = 1;
+            while i < args.len() {
+                if args[i] == "--identifier" {
+                    let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                        reason: "missing value for plugin-settings-path --identifier".to_string(),
+                    })?;
+                    identifier = value.clone();
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+            }
+            Command::PluginSettingsPath { identifier }
+        }
         "project-path" => Command::ProjectPath,
         "board-open" => Command::BoardOpen,
         "net-classes" => Command::NetClasses,
+        "set-net-classes" => {
+            let mut merge_mode = MapMergeMode::Merge;
+            let mut i = 1;
+            while i < args.len() {
+                if args[i] == "--merge-mode" {
+                    let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                        reason: "missing value for set-net-classes --merge-mode".to_string(),
+                    })?;
+                    merge_mode = MapMergeMode::from_str(value)
+                        .map_err(|reason| KiCadError::Config { reason })?;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+            }
+            Command::SetNetClasses { merge_mode }
+        }
         "text-variables" => Command::TextVariables,
+        "set-text-variables" => {
+            let mut merge_mode = MapMergeMode::Merge;
+            let mut variables = BTreeMap::new();
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--merge-mode" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for set-text-variables --merge-mode".to_string(),
+                        })?;
+                        merge_mode = MapMergeMode::from_str(value)
+                            .map_err(|reason| KiCadError::Config { reason })?;
+                        i += 2;
+                    }
+                    "--var" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for set-text-variables --var".to_string(),
+                        })?;
+                        let (name, text) =
+                            value.split_once('=').ok_or_else(|| KiCadError::Config {
+                                reason: "set-text-variables --var requires `<name>=<value>`"
+                                    .to_string(),
+                            })?;
+                        variables.insert(name.to_string(), text.to_string());
+                        i += 2;
+                    }
+                    _ => i += 1,
+                }
+            }
+            Command::SetTextVariables {
+                merge_mode,
+                variables,
+            }
+        }
         "expand-text-variables" => {
             let mut text = Vec::new();
             let mut i = 1;
@@ -742,8 +1136,99 @@ fn parse_args() -> Result<(CliConfig, Command), KiCadError> {
         }
         "nets" => Command::Nets,
         "enabled-layers" => Command::EnabledLayers,
+        "set-enabled-layers" => {
+            let mut copper_layer_count = None;
+            let mut layer_ids = Vec::new();
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--copper-layer-count" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for set-enabled-layers --copper-layer-count"
+                                .to_string(),
+                        })?;
+                        copper_layer_count =
+                            Some(value.parse::<u32>().map_err(|err| KiCadError::Config {
+                                reason: format!(
+                                    "invalid set-enabled-layers --copper-layer-count `{value}`: {err}"
+                                ),
+                            })?);
+                        i += 2;
+                    }
+                    "--layer-id" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for set-enabled-layers --layer-id".to_string(),
+                        })?;
+                        layer_ids.push(value.parse::<i32>().map_err(|err| KiCadError::Config {
+                            reason: format!(
+                                "invalid set-enabled-layers --layer-id `{value}`: {err}"
+                            ),
+                        })?);
+                        i += 2;
+                    }
+                    _ => {
+                        i += 1;
+                    }
+                }
+            }
+
+            Command::SetEnabledLayers {
+                copper_layer_count: copper_layer_count.ok_or_else(|| KiCadError::Config {
+                    reason: "set-enabled-layers requires `--copper-layer-count <u32>`".to_string(),
+                })?,
+                layer_ids,
+            }
+        }
         "active-layer" => Command::ActiveLayer,
+        "set-active-layer" => {
+            let mut layer_id = None;
+            let mut i = 1;
+            while i < args.len() {
+                if args[i] == "--layer-id" {
+                    let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                        reason: "missing value for set-active-layer --layer-id".to_string(),
+                    })?;
+                    layer_id = Some(value.parse::<i32>().map_err(|err| KiCadError::Config {
+                        reason: format!("invalid set-active-layer --layer-id `{value}`: {err}"),
+                    })?);
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+            }
+            Command::SetActiveLayer {
+                layer_id: layer_id.ok_or_else(|| KiCadError::Config {
+                    reason: "set-active-layer requires `--layer-id <i32>`".to_string(),
+                })?,
+            }
+        }
         "visible-layers" => Command::VisibleLayers,
+        "set-visible-layers" => {
+            let mut layer_ids = Vec::new();
+            let mut i = 1;
+            while i < args.len() {
+                if args[i] == "--layer-id" {
+                    let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                        reason: "missing value for set-visible-layers --layer-id".to_string(),
+                    })?;
+                    layer_ids.push(value.parse::<i32>().map_err(|err| KiCadError::Config {
+                        reason: format!("invalid set-visible-layers --layer-id `{value}`: {err}"),
+                    })?);
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+            }
+
+            if layer_ids.is_empty() {
+                return Err(KiCadError::Config {
+                    reason: "set-visible-layers requires one or more `--layer-id <i32>` arguments"
+                        .to_string(),
+                });
+            }
+
+            Command::SetVisibleLayers { layer_ids }
+        }
         "board-origin" => {
             let mut kind = BoardOriginKind::Grid;
             let mut i = 1;
@@ -761,6 +1246,354 @@ fn parse_args() -> Result<(CliConfig, Command), KiCadError> {
             }
             Command::BoardOrigin { kind }
         }
+        "set-board-origin" => {
+            let mut kind = BoardOriginKind::Grid;
+            let mut x_nm = None;
+            let mut y_nm = None;
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--type" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for set-board-origin --type".to_string(),
+                        })?;
+                        kind = BoardOriginKind::from_str(value)
+                            .map_err(|err| KiCadError::Config { reason: err })?;
+                        i += 2;
+                    }
+                    "--x-nm" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for set-board-origin --x-nm".to_string(),
+                        })?;
+                        x_nm = Some(value.parse::<i64>().map_err(|err| KiCadError::Config {
+                            reason: format!("invalid set-board-origin --x-nm `{value}`: {err}"),
+                        })?);
+                        i += 2;
+                    }
+                    "--y-nm" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for set-board-origin --y-nm".to_string(),
+                        })?;
+                        y_nm = Some(value.parse::<i64>().map_err(|err| KiCadError::Config {
+                            reason: format!("invalid set-board-origin --y-nm `{value}`: {err}"),
+                        })?);
+                        i += 2;
+                    }
+                    _ => {
+                        i += 1;
+                    }
+                }
+            }
+            Command::SetBoardOrigin {
+                kind,
+                x_nm: x_nm.ok_or_else(|| KiCadError::Config {
+                    reason: "set-board-origin requires `--x-nm <i64>`".to_string(),
+                })?,
+                y_nm: y_nm.ok_or_else(|| KiCadError::Config {
+                    reason: "set-board-origin requires `--y-nm <i64>`".to_string(),
+                })?,
+            }
+        }
+        "inject-drc-error" => {
+            let mut severity = DrcSeverity::Error;
+            let mut message = None;
+            let mut x_nm = None;
+            let mut y_nm = None;
+            let mut item_ids = Vec::new();
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--severity" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for inject-drc-error --severity".to_string(),
+                        })?;
+                        severity = parse_drc_severity(value)
+                            .map_err(|err| KiCadError::Config { reason: err })?;
+                        i += 2;
+                    }
+                    "--message" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for inject-drc-error --message".to_string(),
+                        })?;
+                        message = Some(value.clone());
+                        i += 2;
+                    }
+                    "--x-nm" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for inject-drc-error --x-nm".to_string(),
+                        })?;
+                        x_nm = Some(value.parse::<i64>().map_err(|err| KiCadError::Config {
+                            reason: format!("invalid inject-drc-error --x-nm `{value}`: {err}"),
+                        })?);
+                        i += 2;
+                    }
+                    "--y-nm" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for inject-drc-error --y-nm".to_string(),
+                        })?;
+                        y_nm = Some(value.parse::<i64>().map_err(|err| KiCadError::Config {
+                            reason: format!("invalid inject-drc-error --y-nm `{value}`: {err}"),
+                        })?);
+                        i += 2;
+                    }
+                    "--item-id" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for inject-drc-error --item-id".to_string(),
+                        })?;
+                        item_ids.push(value.clone());
+                        i += 2;
+                    }
+                    _ => {
+                        i += 1;
+                    }
+                }
+            }
+
+            if (x_nm.is_some() && y_nm.is_none()) || (x_nm.is_none() && y_nm.is_some()) {
+                return Err(KiCadError::Config {
+                    reason:
+                        "inject-drc-error requires both --x-nm and --y-nm when providing a position"
+                            .to_string(),
+                });
+            }
+
+            Command::InjectDrcError {
+                severity,
+                message: message.ok_or_else(|| KiCadError::Config {
+                    reason: "inject-drc-error requires `--message <text>`".to_string(),
+                })?,
+                x_nm,
+                y_nm,
+                item_ids,
+            }
+        }
+        "refresh-editor" => {
+            let mut frame = EditorFrameType::PcbEditor;
+            let mut i = 1;
+            while i < args.len() {
+                if args[i] == "--frame" {
+                    let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                        reason: "missing value for refresh-editor --frame".to_string(),
+                    })?;
+                    frame = EditorFrameType::from_str(value)
+                        .map_err(|err| KiCadError::Config { reason: err })?;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+            }
+            Command::RefreshEditor { frame }
+        }
+        "begin-commit" => Command::BeginCommit,
+        "end-commit" => {
+            let mut id = None;
+            let mut action = CommitAction::Commit;
+            let mut message = String::new();
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--id" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for end-commit --id".to_string(),
+                        })?;
+                        id = Some(value.clone());
+                        i += 2;
+                    }
+                    "--action" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for end-commit --action".to_string(),
+                        })?;
+                        action = CommitAction::from_str(value)
+                            .map_err(|err| KiCadError::Config { reason: err })?;
+                        i += 2;
+                    }
+                    "--message" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for end-commit --message".to_string(),
+                        })?;
+                        message = value.clone();
+                        i += 2;
+                    }
+                    _ => {
+                        i += 1;
+                    }
+                }
+            }
+
+            Command::EndCommit {
+                id: id.ok_or_else(|| KiCadError::Config {
+                    reason: "end-commit requires `--id <uuid>`".to_string(),
+                })?,
+                action,
+                message,
+            }
+        }
+        "save-doc" => Command::SaveDoc,
+        "save-copy" => {
+            let mut path = None;
+            let mut overwrite = false;
+            let mut include_project = false;
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--path" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for save-copy --path".to_string(),
+                        })?;
+                        path = Some(value.clone());
+                        i += 2;
+                    }
+                    "--overwrite" => {
+                        overwrite = true;
+                        i += 1;
+                    }
+                    "--include-project" => {
+                        include_project = true;
+                        i += 1;
+                    }
+                    _ => i += 1,
+                }
+            }
+
+            Command::SaveCopy {
+                path: path.ok_or_else(|| KiCadError::Config {
+                    reason: "save-copy requires `--path <path>`".to_string(),
+                })?,
+                overwrite,
+                include_project,
+            }
+        }
+        "revert-doc" => Command::RevertDoc,
+        "run-action" => {
+            let mut action = None;
+            let mut i = 1;
+            while i < args.len() {
+                if args[i] == "--action" {
+                    let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                        reason: "missing value for run-action --action".to_string(),
+                    })?;
+                    action = Some(value.clone());
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+            }
+            Command::RunAction {
+                action: action.ok_or_else(|| KiCadError::Config {
+                    reason: "run-action requires `--action <name>`".to_string(),
+                })?,
+            }
+        }
+        "create-items" => {
+            let mut items = Vec::new();
+            let mut container_id = None;
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--item" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for create-items --item".to_string(),
+                        })?;
+                        let (type_url, hex) =
+                            value.split_once('=').ok_or_else(|| KiCadError::Config {
+                                reason: "create-items --item requires `<type_url>=<hex>`"
+                                    .to_string(),
+                            })?;
+                        items.push(prost_types::Any {
+                            type_url: type_url.to_string(),
+                            value: hex_to_bytes(hex)
+                                .map_err(|reason| KiCadError::Config { reason })?,
+                        });
+                        i += 2;
+                    }
+                    "--container-id" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for create-items --container-id".to_string(),
+                        })?;
+                        container_id = Some(value.clone());
+                        i += 2;
+                    }
+                    _ => i += 1,
+                }
+            }
+
+            if items.is_empty() {
+                return Err(KiCadError::Config {
+                    reason: "create-items requires one or more `--item <type_url>=<hex>` values"
+                        .to_string(),
+                });
+            }
+
+            Command::CreateItems {
+                items,
+                container_id,
+            }
+        }
+        "update-items" => {
+            let mut items = Vec::new();
+            let mut i = 1;
+            while i < args.len() {
+                if args[i] == "--item" {
+                    let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                        reason: "missing value for update-items --item".to_string(),
+                    })?;
+                    let (type_url, hex) =
+                        value.split_once('=').ok_or_else(|| KiCadError::Config {
+                            reason: "update-items --item requires `<type_url>=<hex>`".to_string(),
+                        })?;
+                    items.push(prost_types::Any {
+                        type_url: type_url.to_string(),
+                        value: hex_to_bytes(hex).map_err(|reason| KiCadError::Config { reason })?,
+                    });
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+            }
+
+            if items.is_empty() {
+                return Err(KiCadError::Config {
+                    reason: "update-items requires one or more `--item <type_url>=<hex>` values"
+                        .to_string(),
+                });
+            }
+
+            Command::UpdateItems { items }
+        }
+        "delete-items" => {
+            let item_ids = parse_item_ids(&args[1..], "delete-items")?;
+            Command::DeleteItems { item_ids }
+        }
+        "parse-create-items" => {
+            let mut contents = None;
+            let mut i = 1;
+            while i < args.len() {
+                if args[i] == "--contents" {
+                    let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                        reason: "missing value for parse-create-items --contents".to_string(),
+                    })?;
+                    contents = Some(value.clone());
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+            }
+
+            Command::ParseCreateItemsFromString {
+                contents: contents.ok_or_else(|| KiCadError::Config {
+                    reason: "parse-create-items requires `--contents <sexpr>`".to_string(),
+                })?,
+            }
+        }
+        "add-to-selection" => {
+            let item_ids = parse_item_ids(&args[1..], "add-to-selection")?;
+            Command::AddToSelection { item_ids }
+        }
+        "remove-from-selection" => {
+            let item_ids = parse_item_ids(&args[1..], "remove-from-selection")?;
+            Command::RemoveFromSelection { item_ids }
+        }
+        "clear-selection" => Command::ClearSelection,
         "selection-summary" => Command::SelectionSummary,
         "selection-details" => Command::SelectionDetails,
         "selection-raw" => Command::SelectionRaw,
@@ -1017,8 +1850,123 @@ fn parse_args() -> Result<(CliConfig, Command), KiCadError> {
         "board-as-string" => Command::BoardAsString,
         "selection-as-string" => Command::SelectionAsString,
         "stackup" => Command::Stackup,
+        "update-stackup" => Command::UpdateStackup,
         "graphics-defaults" => Command::GraphicsDefaults,
         "appearance" => Command::Appearance,
+        "set-appearance" => {
+            let mut inactive_layer_display = None;
+            let mut net_color_display = None;
+            let mut board_flip = None;
+            let mut ratsnest_display = None;
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--inactive-layer-display" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for set-appearance --inactive-layer-display"
+                                .to_string(),
+                        })?;
+                        inactive_layer_display = Some(
+                            parse_inactive_layer_display_mode(value)
+                                .map_err(|err| KiCadError::Config { reason: err })?,
+                        );
+                        i += 2;
+                    }
+                    "--net-color-display" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for set-appearance --net-color-display"
+                                .to_string(),
+                        })?;
+                        net_color_display = Some(
+                            parse_net_color_display_mode(value)
+                                .map_err(|err| KiCadError::Config { reason: err })?,
+                        );
+                        i += 2;
+                    }
+                    "--board-flip" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for set-appearance --board-flip".to_string(),
+                        })?;
+                        board_flip = Some(
+                            parse_board_flip_mode(value)
+                                .map_err(|err| KiCadError::Config { reason: err })?,
+                        );
+                        i += 2;
+                    }
+                    "--ratsnest-display" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for set-appearance --ratsnest-display"
+                                .to_string(),
+                        })?;
+                        ratsnest_display = Some(
+                            parse_ratsnest_display_mode(value)
+                                .map_err(|err| KiCadError::Config { reason: err })?,
+                        );
+                        i += 2;
+                    }
+                    _ => {
+                        i += 1;
+                    }
+                }
+            }
+
+            Command::SetAppearance {
+                inactive_layer_display: inactive_layer_display.ok_or_else(|| KiCadError::Config {
+                    reason: "set-appearance requires `--inactive-layer-display <normal|dimmed|hidden>`".to_string(),
+                })?,
+                net_color_display: net_color_display.ok_or_else(|| KiCadError::Config {
+                    reason: "set-appearance requires `--net-color-display <all|ratsnest|off>`"
+                        .to_string(),
+                })?,
+                board_flip: board_flip.ok_or_else(|| KiCadError::Config {
+                    reason: "set-appearance requires `--board-flip <normal|flipped-x>`"
+                        .to_string(),
+                })?,
+                ratsnest_display: ratsnest_display.ok_or_else(|| KiCadError::Config {
+                    reason:
+                        "set-appearance requires `--ratsnest-display <all-layers|visible-layers>`"
+                            .to_string(),
+                    })?,
+            }
+        }
+        "refill-zones" => {
+            let mut zone_ids = Vec::new();
+            let mut i = 1;
+            while i < args.len() {
+                if args[i] == "--zone-id" {
+                    let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                        reason: "missing value for refill-zones --zone-id".to_string(),
+                    })?;
+                    zone_ids.push(value.clone());
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+            }
+            Command::RefillZones { zone_ids }
+        }
+        "interactive-move" => {
+            let mut item_ids = Vec::new();
+            let mut i = 1;
+            while i < args.len() {
+                if args[i] == "--id" {
+                    let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                        reason: "missing value for interactive-move --id".to_string(),
+                    })?;
+                    item_ids.push(value.clone());
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+            }
+            if item_ids.is_empty() {
+                return Err(KiCadError::Config {
+                    reason: "interactive-move requires one or more `--id <uuid>` arguments"
+                        .to_string(),
+                });
+            }
+            Command::InteractiveMoveItems { item_ids }
+        }
         "netclass" => Command::NetClass,
         "proto-coverage-board-read" => Command::ProtoCoverageBoardRead,
         "board-read-report" => {
@@ -1065,17 +2013,179 @@ fn parse_args() -> Result<(CliConfig, Command), KiCadError> {
     Ok((config, command))
 }
 
+fn parse_inactive_layer_display_mode(value: &str) -> Result<InactiveLayerDisplayMode, String> {
+    match value {
+        "normal" => Ok(InactiveLayerDisplayMode::Normal),
+        "dimmed" => Ok(InactiveLayerDisplayMode::Dimmed),
+        "hidden" => Ok(InactiveLayerDisplayMode::Hidden),
+        _ => Err(format!(
+            "unknown inactive layer display `{value}`; expected normal, dimmed, or hidden"
+        )),
+    }
+}
+
+fn parse_net_color_display_mode(value: &str) -> Result<NetColorDisplayMode, String> {
+    match value {
+        "all" => Ok(NetColorDisplayMode::All),
+        "ratsnest" => Ok(NetColorDisplayMode::Ratsnest),
+        "off" => Ok(NetColorDisplayMode::Off),
+        _ => Err(format!(
+            "unknown net color display `{value}`; expected all, ratsnest, or off"
+        )),
+    }
+}
+
+fn parse_board_flip_mode(value: &str) -> Result<BoardFlipMode, String> {
+    match value {
+        "normal" => Ok(BoardFlipMode::Normal),
+        "flipped-x" => Ok(BoardFlipMode::FlippedX),
+        _ => Err(format!(
+            "unknown board flip mode `{value}`; expected normal or flipped-x"
+        )),
+    }
+}
+
+fn parse_ratsnest_display_mode(value: &str) -> Result<RatsnestDisplayMode, String> {
+    match value {
+        "all-layers" => Ok(RatsnestDisplayMode::AllLayers),
+        "visible-layers" => Ok(RatsnestDisplayMode::VisibleLayers),
+        _ => Err(format!(
+            "unknown ratsnest display `{value}`; expected all-layers or visible-layers"
+        )),
+    }
+}
+
+fn parse_drc_severity(value: &str) -> Result<DrcSeverity, String> {
+    match value {
+        "warning" => Ok(DrcSeverity::Warning),
+        "error" => Ok(DrcSeverity::Error),
+        "exclusion" => Ok(DrcSeverity::Exclusion),
+        "ignore" => Ok(DrcSeverity::Ignore),
+        "info" => Ok(DrcSeverity::Info),
+        "action" => Ok(DrcSeverity::Action),
+        "debug" => Ok(DrcSeverity::Debug),
+        "undefined" => Ok(DrcSeverity::Undefined),
+        _ => Err(format!(
+            "unknown drc severity `{value}`; expected warning, error, exclusion, ignore, info, action, debug, or undefined"
+        )),
+    }
+}
+
 fn default_config() -> CliConfig {
     CliConfig {
         socket: None,
         token: None,
+        client_name: None,
         timeout_ms: 15_000,
     }
 }
 
 fn print_help() {
     println!(
-        "kicad-ipc-cli\n\nUSAGE:\n  cargo run --bin kicad-ipc-cli -- [--socket URI] [--token TOKEN] [--timeout-ms N] <command> [command options]\n\nCOMMANDS:\n  ping                         Check IPC connectivity\n  version                      Fetch KiCad version\n  open-docs [--type <type>]    List open docs (default type: pcb)\n  project-path                 Get current project path from open PCB docs\n  board-open                   Exit non-zero if no PCB doc is open\n  net-classes                  List project netclass definitions\n  text-variables               List text variables for current board document\n  expand-text-variables        Expand variables in provided text values\n                               Options: --text <value> (repeatable)\n  text-extents                 Measure text bounding box\n                               Options: --text <value>\n  text-as-shapes               Convert text to rendered shapes\n                               Options: --text <value> (repeatable)\n  nets                         List board nets (requires one open PCB)\n  netlist-pads                 Emit pad-level netlist data (with footprint context)\n  items-by-id --id <uuid> ...  Show parsed details for specific item IDs\n  item-bbox --id <uuid> ...    Show bounding boxes for item IDs\n  hit-test --id <uuid> --x-nm <x> --y-nm <y> [--tolerance-nm <n>]\n                               Hit-test one item at a point\n  types-pcb                    List PCB KiCad object type IDs from proto enum\n  items-raw --type-id <id> ... Dump raw Any payloads for requested item type IDs\n  items-raw-all-pcb [--debug]  Dump all PCB item payloads across all PCB object types\n  pad-shape-polygon --pad-id <uuid> ... --layer-id <i32> [--debug]\n                               Dump pad polygons on a target layer\n  padstack-presence --item-id <uuid> ... --layer-id <i32> ... [--debug]\n                               Check padstack shape presence matrix across layers\n  title-block                  Show title block fields\n  board-as-string              Dump board as KiCad s-expression text\n  selection-as-string          Dump current selection as KiCad s-expression text\n  stackup                      Show typed board stackup\n  graphics-defaults            Show typed graphics defaults\n  appearance                   Show typed editor appearance settings\n  netclass                     Show typed netclass map for current board nets\n  proto-coverage-board-read    Print board-read command coverage vs proto\n  board-read-report [--out P]  Write markdown board reconstruction report\n  enabled-layers               List enabled board layers\n  active-layer                 Show active board layer\n  visible-layers               Show currently visible board layers\n  board-origin [--type <t>]    Show board origin (`grid` default, or `drill`)\n  selection-summary            Show current selection item type counts\n  selection-details            Show parsed details for selected items\n  selection-raw                Show raw Any payload bytes for selected items\n  smoke                        ping + version + board-open summary\n  help                         Show help\n\nTYPES:\n  schematic | symbol | pcb | footprint | drawing-sheet | project\n"
+        r#"kicad-ipc-cli
+
+USAGE:
+  cargo run --bin kicad-ipc-cli -- [--socket URI] [--token TOKEN] [--client-name NAME] [--timeout-ms N] <command> [command options]
+
+COMMANDS:
+  ping                         Check IPC connectivity
+  version                      Fetch KiCad version
+  kicad-binary-path [--binary-name <name>]
+                               Resolve absolute path for a KiCad binary (default: kicad-cli)
+  plugin-settings-path [--identifier <id>]
+                               Resolve writeable plugin settings directory (default: kicad-ipc-rust)
+  open-docs [--type <type>]    List open docs (default type: pcb)
+  project-path                 Get current project path from open PCB docs
+  board-open                   Exit non-zero if no PCB doc is open
+  net-classes                  List project netclass definitions
+  set-net-classes [--merge-mode <merge|replace>]
+                               Write current netclass set back with selected merge mode
+  text-variables               List text variables for current board document
+  set-text-variables [--merge-mode <merge|replace>] [--var <name=value> ...]
+                               Set text variables for current board document
+  expand-text-variables        Expand variables in provided text values
+                               Options: --text <value> (repeatable)
+  text-extents                 Measure text bounding box
+                               Options: --text <value>
+  text-as-shapes               Convert text to rendered shapes
+                               Options: --text <value> (repeatable)
+  nets                         List board nets (requires one open PCB)
+  netlist-pads                 Emit pad-level netlist data (with footprint context)
+  items-by-id --id <uuid> ...  Show parsed details for specific item IDs
+  item-bbox --id <uuid> ...    Show bounding boxes for item IDs
+  hit-test --id <uuid> --x-nm <x> --y-nm <y> [--tolerance-nm <n>]
+                               Hit-test one item at a point
+  types-pcb                    List PCB KiCad object type IDs from proto enum
+  items-raw --type-id <id> ... Dump raw Any payloads for requested item type IDs
+  items-raw-all-pcb [--debug]  Dump all PCB item payloads across all PCB object types
+  pad-shape-polygon --pad-id <uuid> ... --layer-id <i32> [--debug]
+                               Dump pad polygons on a target layer
+  padstack-presence --item-id <uuid> ... --layer-id <i32> ... [--debug]
+                               Check padstack shape presence matrix across layers
+  title-block                  Show title block fields
+  board-as-string              Dump board as KiCad s-expression text
+  selection-as-string          Dump current selection as KiCad s-expression text
+  stackup                      Show typed board stackup
+  update-stackup               Round-trip current stackup through UpdateBoardStackup
+  graphics-defaults            Show typed graphics defaults
+  appearance                   Show typed editor appearance settings
+  set-appearance --inactive-layer-display <normal|dimmed|hidden>
+                 --net-color-display <all|ratsnest|off>
+                 --board-flip <normal|flipped-x>
+                 --ratsnest-display <all-layers|visible-layers>
+                               Set editor appearance settings
+  inject-drc-error --severity <s> --message <text> [--x-nm <i64> --y-nm <i64>] [--item-id <uuid> ...]
+                               Inject a DRC marker (severity: warning|error|exclusion|ignore|info|action|debug|undefined)
+  refill-zones [--zone-id <uuid> ...]
+                               Refill all zones or a provided subset
+  interactive-move --id <uuid> ...
+                               Start interactive move tool for item IDs
+  netclass                     Show typed netclass map for current board nets
+  proto-coverage-board-read    Print board-read command coverage vs proto
+  board-read-report [--out P]  Write markdown board reconstruction report
+  enabled-layers               List enabled board layers
+  set-enabled-layers --copper-layer-count <u32> [--layer-id <i32> ...]
+                               Set enabled board layer set
+  active-layer                 Show active board layer
+  set-active-layer --layer-id <i32>
+                               Set active board layer
+  visible-layers               Show currently visible board layers
+  set-visible-layers --layer-id <i32> ...
+                               Set visible board layers
+  board-origin [--type <t>]    Show board origin (`grid` default, or `drill`)
+  set-board-origin --type <t> --x-nm <i64> --y-nm <i64>
+                               Set board origin (`grid` or `drill`)
+  refresh-editor [--frame <f>] Refresh a specific editor frame (default: pcb)
+  begin-commit                 Start staged commit and print commit ID
+  end-commit --id <uuid> [--action <commit|drop>] [--message <text>]
+                               End staged commit with commit/drop action
+  save-doc                     Save current board document
+  save-copy --path <path> [--overwrite] [--include-project]
+                               Save current board document to a new location
+  revert-doc                   Revert current board document from disk
+  run-action --action <name>   Run a raw KiCad tool action
+  create-items --item <type_url>=<hex> ... [--container-id <uuid>]
+                               Create raw Any payload items in current board document
+  update-items --item <type_url>=<hex> ...
+                               Update raw Any payload items in current board document
+  delete-items --id <uuid> ...
+                               Delete item IDs from current board document
+  parse-create-items --contents <sexpr>
+                               Parse s-expression and create resulting items
+  add-to-selection --id <uuid> ...
+                               Add items to current selection
+  remove-from-selection --id <uuid> ...
+                               Remove items from current selection
+  clear-selection              Clear current item selection
+  selection-summary            Show current selection item type counts
+  selection-details            Show parsed details for selected items
+  selection-raw                Show raw Any payload bytes for selected items
+  smoke                        ping + version + board-open summary
+  help                         Show help
+
+TYPES:
+  schematic | symbol | pcb | footprint | drawing-sheet | project
+"#
     );
 }
 
@@ -1622,5 +2732,546 @@ fn hex_char(value: u8) -> char {
         0..=9 => char::from(b'0' + value),
         10..=15 => char::from(b'a' + (value - 10)),
         _ => '?',
+    }
+}
+
+fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, String> {
+    if !hex.len().is_multiple_of(2) {
+        return Err("hex payload must have an even number of characters".to_string());
+    }
+
+    let mut bytes = Vec::with_capacity(hex.len() / 2);
+    let chars: Vec<char> = hex.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let high = hex_nibble(chars[i])?;
+        let low = hex_nibble(chars[i + 1])?;
+        bytes.push((high << 4) | low);
+        i += 2;
+    }
+
+    Ok(bytes)
+}
+
+fn hex_nibble(c: char) -> Result<u8, String> {
+    match c {
+        '0'..='9' => Ok((c as u8) - b'0'),
+        'a'..='f' => Ok((c as u8) - b'a' + 10),
+        'A'..='F' => Ok((c as u8) - b'A' + 10),
+        _ => Err(format!("invalid hex character `{c}`")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_args_from, Command};
+    use kicad_ipc::{
+        BoardFlipMode, BoardOriginKind, CommitAction, DrcSeverity, InactiveLayerDisplayMode,
+        NetColorDisplayMode, RatsnestDisplayMode,
+    };
+
+    #[test]
+    fn parse_args_accepts_client_name_for_commit_flow() {
+        let (config, command) = parse_args_from(vec![
+            "--client-name".to_string(),
+            "write-test".to_string(),
+            "begin-commit".to_string(),
+        ])
+        .expect("client-name + begin-commit should parse");
+
+        assert_eq!(config.client_name.as_deref(), Some("write-test"));
+        assert!(matches!(command, Command::BeginCommit));
+    }
+
+    #[test]
+    fn parse_args_parses_end_commit_flags() {
+        let (_, command) = parse_args_from(vec![
+            "end-commit".to_string(),
+            "--id".to_string(),
+            "commit-1".to_string(),
+            "--action".to_string(),
+            "drop".to_string(),
+            "--message".to_string(),
+            "cleanup".to_string(),
+        ])
+        .expect("end-commit args should parse");
+
+        match command {
+            Command::EndCommit {
+                id,
+                action,
+                message,
+            } => {
+                assert_eq!(id, "commit-1");
+                assert_eq!(action, CommitAction::Drop);
+                assert_eq!(message, "cleanup");
+            }
+            other => panic!("unexpected command variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_args_parses_refresh_editor_frame() {
+        let (_, command) = parse_args_from(vec![
+            "refresh-editor".to_string(),
+            "--frame".to_string(),
+            "schematic".to_string(),
+        ])
+        .expect("refresh-editor args should parse");
+
+        match command {
+            Command::RefreshEditor { frame } => {
+                assert_eq!(frame.to_string(), "schematic");
+            }
+            other => panic!("unexpected command variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_args_parses_clear_selection() {
+        let (_, command) = parse_args_from(vec!["clear-selection".to_string()])
+            .expect("clear-selection should parse");
+        assert!(matches!(command, Command::ClearSelection));
+    }
+
+    #[test]
+    fn parse_args_parses_add_to_selection() {
+        let (_, command) = parse_args_from(vec![
+            "add-to-selection".to_string(),
+            "--id".to_string(),
+            "zone-1".to_string(),
+            "--id".to_string(),
+            "zone-2".to_string(),
+        ])
+        .expect("add-to-selection args should parse");
+
+        match command {
+            Command::AddToSelection { item_ids } => {
+                assert_eq!(item_ids, vec!["zone-1".to_string(), "zone-2".to_string()]);
+            }
+            other => panic!("unexpected command variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_args_parses_remove_from_selection() {
+        let (_, command) = parse_args_from(vec![
+            "remove-from-selection".to_string(),
+            "--id".to_string(),
+            "zone-1".to_string(),
+            "--id".to_string(),
+            "zone-2".to_string(),
+        ])
+        .expect("remove-from-selection args should parse");
+
+        match command {
+            Command::RemoveFromSelection { item_ids } => {
+                assert_eq!(item_ids, vec!["zone-1".to_string(), "zone-2".to_string()]);
+            }
+            other => panic!("unexpected command variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_args_parses_set_active_layer() {
+        let (_, command) = parse_args_from(vec![
+            "set-active-layer".to_string(),
+            "--layer-id".to_string(),
+            "31".to_string(),
+        ])
+        .expect("set-active-layer args should parse");
+
+        match command {
+            Command::SetActiveLayer { layer_id } => assert_eq!(layer_id, 31),
+            other => panic!("unexpected command variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_args_parses_kicad_binary_path() {
+        let (_, command) = parse_args_from(vec![
+            "kicad-binary-path".to_string(),
+            "--binary-name".to_string(),
+            "kicad-cli".to_string(),
+        ])
+        .expect("kicad-binary-path args should parse");
+
+        match command {
+            Command::KiCadBinaryPath { binary_name } => assert_eq!(binary_name, "kicad-cli"),
+            other => panic!("unexpected command variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_args_parses_plugin_settings_path() {
+        let (_, command) = parse_args_from(vec![
+            "plugin-settings-path".to_string(),
+            "--identifier".to_string(),
+            "com.example.test".to_string(),
+        ])
+        .expect("plugin-settings-path args should parse");
+
+        match command {
+            Command::PluginSettingsPath { identifier } => {
+                assert_eq!(identifier, "com.example.test")
+            }
+            other => panic!("unexpected command variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_args_parses_set_net_classes() {
+        let (_, command) = parse_args_from(vec![
+            "set-net-classes".to_string(),
+            "--merge-mode".to_string(),
+            "replace".to_string(),
+        ])
+        .expect("set-net-classes args should parse");
+
+        match command {
+            Command::SetNetClasses { merge_mode } => {
+                assert_eq!(merge_mode, kicad_ipc::MapMergeMode::Replace)
+            }
+            other => panic!("unexpected command variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_args_parses_set_text_variables() {
+        let (_, command) = parse_args_from(vec![
+            "set-text-variables".to_string(),
+            "--merge-mode".to_string(),
+            "replace".to_string(),
+            "--var".to_string(),
+            "REV=A".to_string(),
+        ])
+        .expect("set-text-variables args should parse");
+
+        match command {
+            Command::SetTextVariables {
+                merge_mode,
+                variables,
+            } => {
+                assert_eq!(merge_mode, kicad_ipc::MapMergeMode::Replace);
+                assert_eq!(variables.get("REV").map(|value| value.as_str()), Some("A"));
+            }
+            other => panic!("unexpected command variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_args_parses_save_doc() {
+        let (_, command) =
+            parse_args_from(vec!["save-doc".to_string()]).expect("save-doc should parse");
+        assert!(matches!(command, Command::SaveDoc));
+    }
+
+    #[test]
+    fn parse_args_parses_save_copy() {
+        let (_, command) = parse_args_from(vec![
+            "save-copy".to_string(),
+            "--path".to_string(),
+            "/tmp/example.kicad_pcb".to_string(),
+            "--overwrite".to_string(),
+            "--include-project".to_string(),
+        ])
+        .expect("save-copy args should parse");
+
+        match command {
+            Command::SaveCopy {
+                path,
+                overwrite,
+                include_project,
+            } => {
+                assert_eq!(path, "/tmp/example.kicad_pcb");
+                assert!(overwrite);
+                assert!(include_project);
+            }
+            other => panic!("unexpected command variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_args_parses_revert_doc() {
+        let (_, command) =
+            parse_args_from(vec!["revert-doc".to_string()]).expect("revert-doc should parse");
+        assert!(matches!(command, Command::RevertDoc));
+    }
+
+    #[test]
+    fn parse_args_parses_run_action() {
+        let (_, command) = parse_args_from(vec![
+            "run-action".to_string(),
+            "--action".to_string(),
+            "pcbnew.InteractiveSelection.ClearSelection".to_string(),
+        ])
+        .expect("run-action args should parse");
+
+        match command {
+            Command::RunAction { action } => {
+                assert_eq!(action, "pcbnew.InteractiveSelection.ClearSelection")
+            }
+            other => panic!("unexpected command variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_args_parses_create_items() {
+        let (_, command) = parse_args_from(vec![
+            "create-items".to_string(),
+            "--item".to_string(),
+            "type.googleapis.com/kiapi.board.types.Text=0a00".to_string(),
+            "--container-id".to_string(),
+            "container-1".to_string(),
+        ])
+        .expect("create-items args should parse");
+
+        match command {
+            Command::CreateItems {
+                items,
+                container_id,
+            } => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(
+                    items[0].type_url,
+                    "type.googleapis.com/kiapi.board.types.Text"
+                );
+                assert_eq!(items[0].value, vec![0x0a, 0x00]);
+                assert_eq!(container_id.as_deref(), Some("container-1"));
+            }
+            other => panic!("unexpected command variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_args_parses_update_items() {
+        let (_, command) = parse_args_from(vec![
+            "update-items".to_string(),
+            "--item".to_string(),
+            "type.googleapis.com/kiapi.board.types.Text=0a00".to_string(),
+        ])
+        .expect("update-items args should parse");
+
+        match command {
+            Command::UpdateItems { items } => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(
+                    items[0].type_url,
+                    "type.googleapis.com/kiapi.board.types.Text"
+                );
+                assert_eq!(items[0].value, vec![0x0a, 0x00]);
+            }
+            other => panic!("unexpected command variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_args_parses_delete_items() {
+        let (_, command) = parse_args_from(vec![
+            "delete-items".to_string(),
+            "--id".to_string(),
+            "item-1".to_string(),
+            "--id".to_string(),
+            "item-2".to_string(),
+        ])
+        .expect("delete-items args should parse");
+
+        match command {
+            Command::DeleteItems { item_ids } => {
+                assert_eq!(item_ids, vec!["item-1".to_string(), "item-2".to_string()]);
+            }
+            other => panic!("unexpected command variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_args_parses_parse_create_items() {
+        let (_, command) = parse_args_from(vec![
+            "parse-create-items".to_string(),
+            "--contents".to_string(),
+            "(kicad_pcb (version 20240108))".to_string(),
+        ])
+        .expect("parse-create-items args should parse");
+
+        match command {
+            Command::ParseCreateItemsFromString { contents } => {
+                assert_eq!(contents, "(kicad_pcb (version 20240108))");
+            }
+            other => panic!("unexpected command variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_args_parses_set_enabled_layers() {
+        let (_, command) = parse_args_from(vec![
+            "set-enabled-layers".to_string(),
+            "--copper-layer-count".to_string(),
+            "2".to_string(),
+            "--layer-id".to_string(),
+            "47".to_string(),
+            "--layer-id".to_string(),
+            "52".to_string(),
+        ])
+        .expect("set-enabled-layers args should parse");
+
+        match command {
+            Command::SetEnabledLayers {
+                copper_layer_count,
+                layer_ids,
+            } => {
+                assert_eq!(copper_layer_count, 2);
+                assert_eq!(layer_ids, vec![47, 52]);
+            }
+            other => panic!("unexpected command variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_args_parses_set_visible_layers() {
+        let (_, command) = parse_args_from(vec![
+            "set-visible-layers".to_string(),
+            "--layer-id".to_string(),
+            "3".to_string(),
+            "--layer-id".to_string(),
+            "47".to_string(),
+        ])
+        .expect("set-visible-layers args should parse");
+
+        match command {
+            Command::SetVisibleLayers { layer_ids } => assert_eq!(layer_ids, vec![3, 47]),
+            other => panic!("unexpected command variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_args_parses_set_board_origin() {
+        let (_, command) = parse_args_from(vec![
+            "set-board-origin".to_string(),
+            "--type".to_string(),
+            "drill".to_string(),
+            "--x-nm".to_string(),
+            "123".to_string(),
+            "--y-nm".to_string(),
+            "456".to_string(),
+        ])
+        .expect("set-board-origin args should parse");
+
+        match command {
+            Command::SetBoardOrigin { kind, x_nm, y_nm } => {
+                assert_eq!(kind, BoardOriginKind::Drill);
+                assert_eq!(x_nm, 123);
+                assert_eq!(y_nm, 456);
+            }
+            other => panic!("unexpected command variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_args_parses_set_appearance() {
+        let (_, command) = parse_args_from(vec![
+            "set-appearance".to_string(),
+            "--inactive-layer-display".to_string(),
+            "hidden".to_string(),
+            "--net-color-display".to_string(),
+            "off".to_string(),
+            "--board-flip".to_string(),
+            "flipped-x".to_string(),
+            "--ratsnest-display".to_string(),
+            "visible-layers".to_string(),
+        ])
+        .expect("set-appearance args should parse");
+
+        match command {
+            Command::SetAppearance {
+                inactive_layer_display,
+                net_color_display,
+                board_flip,
+                ratsnest_display,
+            } => {
+                assert_eq!(inactive_layer_display, InactiveLayerDisplayMode::Hidden);
+                assert_eq!(net_color_display, NetColorDisplayMode::Off);
+                assert_eq!(board_flip, BoardFlipMode::FlippedX);
+                assert_eq!(ratsnest_display, RatsnestDisplayMode::VisibleLayers);
+            }
+            other => panic!("unexpected command variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_args_parses_inject_drc_error() {
+        let (_, command) = parse_args_from(vec![
+            "inject-drc-error".to_string(),
+            "--severity".to_string(),
+            "warning".to_string(),
+            "--message".to_string(),
+            "marker".to_string(),
+            "--x-nm".to_string(),
+            "100".to_string(),
+            "--y-nm".to_string(),
+            "200".to_string(),
+        ])
+        .expect("inject-drc-error args should parse");
+
+        match command {
+            Command::InjectDrcError {
+                severity,
+                message,
+                x_nm,
+                y_nm,
+                item_ids,
+            } => {
+                assert_eq!(severity, DrcSeverity::Warning);
+                assert_eq!(message, "marker");
+                assert_eq!(x_nm, Some(100));
+                assert_eq!(y_nm, Some(200));
+                assert!(item_ids.is_empty());
+            }
+            other => panic!("unexpected command variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_args_parses_refill_zones() {
+        let (_, command) = parse_args_from(vec![
+            "refill-zones".to_string(),
+            "--zone-id".to_string(),
+            "zone-1".to_string(),
+            "--zone-id".to_string(),
+            "zone-2".to_string(),
+        ])
+        .expect("refill-zones args should parse");
+
+        match command {
+            Command::RefillZones { zone_ids } => {
+                assert_eq!(zone_ids, vec!["zone-1".to_string(), "zone-2".to_string()]);
+            }
+            other => panic!("unexpected command variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_args_parses_update_stackup() {
+        let (_, command) = parse_args_from(vec!["update-stackup".to_string()])
+            .expect("update-stackup should parse");
+        assert!(matches!(command, Command::UpdateStackup));
+    }
+
+    #[test]
+    fn parse_args_parses_interactive_move_items() {
+        let (_, command) = parse_args_from(vec![
+            "interactive-move".to_string(),
+            "--id".to_string(),
+            "item-1".to_string(),
+            "--id".to_string(),
+            "item-2".to_string(),
+        ])
+        .expect("interactive-move args should parse");
+
+        match command {
+            Command::InteractiveMoveItems { item_ids } => {
+                assert_eq!(item_ids, vec!["item-1".to_string(), "item-2".to_string()]);
+            }
+            other => panic!("unexpected command variant: {other:?}"),
+        }
     }
 }

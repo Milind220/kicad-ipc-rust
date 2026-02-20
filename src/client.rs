@@ -9,7 +9,7 @@ use crate::model::board::{
     ArcStartMidEndNm, BoardEditorAppearanceSettings, BoardEnabledLayers, BoardFlipMode,
     BoardLayerClass, BoardLayerGraphicsDefault, BoardLayerInfo, BoardNet, BoardOriginKind,
     BoardStackup, BoardStackupDielectricProperties, BoardStackupLayer, BoardStackupLayerType,
-    ColorRgba, GraphicsDefaults, InactiveLayerDisplayMode, NetClassBoardSettings,
+    ColorRgba, DrcSeverity, GraphicsDefaults, InactiveLayerDisplayMode, NetClassBoardSettings,
     NetClassForNetEntry, NetClassInfo, NetClassType, NetColorDisplayMode, PadNetEntry,
     PadShapeAsPolygonEntry, PadstackPresenceEntry, PadstackPresenceState, PcbArc,
     PcbBoardGraphicShape, PcbBoardText, PcbBoardTextBox, PcbDimension, PcbField, PcbFootprint,
@@ -18,8 +18,9 @@ use crate::model::board::{
     Vector2Nm,
 };
 use crate::model::common::{
-    DocumentSpecifier, DocumentType, ItemBoundingBox, ItemHitTestResult, PcbObjectTypeCode,
-    ProjectInfo, SelectionItemDetail, SelectionSummary, SelectionTypeCount, TextAsShapesEntry,
+    CommitAction, CommitSession, DocumentSpecifier, DocumentType, EditorFrameType, ItemBoundingBox,
+    ItemHitTestResult, MapMergeMode, PcbObjectTypeCode, ProjectInfo, RunActionStatus,
+    SelectionItemDetail, SelectionSummary, SelectionTypeCount, TextAsShapesEntry,
     TextAttributesSpec, TextBoxSpec, TextExtents, TextHorizontalAlignment, TextObjectSpec,
     TextShape, TextShapeGeometry, TextSpec, TextVerticalAlignment, TitleBlockInfo, VersionInfo,
 };
@@ -36,37 +37,68 @@ const KICAD_API_TOKEN_ENV: &str = "KICAD_API_TOKEN";
 
 const CMD_PING: &str = "kiapi.common.commands.Ping";
 const CMD_GET_VERSION: &str = "kiapi.common.commands.GetVersion";
+const CMD_GET_KICAD_BINARY_PATH: &str = "kiapi.common.commands.GetKiCadBinaryPath";
+const CMD_GET_PLUGIN_SETTINGS_PATH: &str = "kiapi.common.commands.GetPluginSettingsPath";
 const CMD_GET_NET_CLASSES: &str = "kiapi.common.commands.GetNetClasses";
+const CMD_SET_NET_CLASSES: &str = "kiapi.common.commands.SetNetClasses";
 const CMD_GET_TEXT_VARIABLES: &str = "kiapi.common.commands.GetTextVariables";
+const CMD_SET_TEXT_VARIABLES: &str = "kiapi.common.commands.SetTextVariables";
 const CMD_EXPAND_TEXT_VARIABLES: &str = "kiapi.common.commands.ExpandTextVariables";
 const CMD_GET_TEXT_EXTENTS: &str = "kiapi.common.commands.GetTextExtents";
 const CMD_GET_TEXT_AS_SHAPES: &str = "kiapi.common.commands.GetTextAsShapes";
+const CMD_REFRESH_EDITOR: &str = "kiapi.common.commands.RefreshEditor";
 const CMD_GET_OPEN_DOCUMENTS: &str = "kiapi.common.commands.GetOpenDocuments";
+const CMD_RUN_ACTION: &str = "kiapi.common.commands.RunAction";
 const CMD_GET_NETS: &str = "kiapi.board.commands.GetNets";
 const CMD_GET_BOARD_ENABLED_LAYERS: &str = "kiapi.board.commands.GetBoardEnabledLayers";
+const CMD_SET_BOARD_ENABLED_LAYERS: &str = "kiapi.board.commands.SetBoardEnabledLayers";
 const CMD_GET_ACTIVE_LAYER: &str = "kiapi.board.commands.GetActiveLayer";
+const CMD_SET_ACTIVE_LAYER: &str = "kiapi.board.commands.SetActiveLayer";
 const CMD_GET_VISIBLE_LAYERS: &str = "kiapi.board.commands.GetVisibleLayers";
+const CMD_SET_VISIBLE_LAYERS: &str = "kiapi.board.commands.SetVisibleLayers";
 const CMD_GET_BOARD_ORIGIN: &str = "kiapi.board.commands.GetBoardOrigin";
+const CMD_SET_BOARD_ORIGIN: &str = "kiapi.board.commands.SetBoardOrigin";
 const CMD_GET_BOARD_STACKUP: &str = "kiapi.board.commands.GetBoardStackup";
+const CMD_UPDATE_BOARD_STACKUP: &str = "kiapi.board.commands.UpdateBoardStackup";
 const CMD_GET_GRAPHICS_DEFAULTS: &str = "kiapi.board.commands.GetGraphicsDefaults";
 const CMD_GET_BOARD_EDITOR_APPEARANCE_SETTINGS: &str =
     "kiapi.board.commands.GetBoardEditorAppearanceSettings";
+const CMD_SET_BOARD_EDITOR_APPEARANCE_SETTINGS: &str =
+    "kiapi.board.commands.SetBoardEditorAppearanceSettings";
+const CMD_INTERACTIVE_MOVE_ITEMS: &str = "kiapi.board.commands.InteractiveMoveItems";
 const CMD_GET_ITEMS_BY_NET: &str = "kiapi.board.commands.GetItemsByNet";
 const CMD_GET_ITEMS_BY_NET_CLASS: &str = "kiapi.board.commands.GetItemsByNetClass";
 const CMD_GET_NETCLASS_FOR_NETS: &str = "kiapi.board.commands.GetNetClassForNets";
+const CMD_REFILL_ZONES: &str = "kiapi.board.commands.RefillZones";
 const CMD_GET_PAD_SHAPE_AS_POLYGON: &str = "kiapi.board.commands.GetPadShapeAsPolygon";
 const CMD_CHECK_PADSTACK_PRESENCE_ON_LAYERS: &str =
     "kiapi.board.commands.CheckPadstackPresenceOnLayers";
+const CMD_INJECT_DRC_ERROR: &str = "kiapi.board.commands.InjectDrcError";
 const CMD_GET_SELECTION: &str = "kiapi.common.commands.GetSelection";
+const CMD_ADD_TO_SELECTION: &str = "kiapi.common.commands.AddToSelection";
+const CMD_REMOVE_FROM_SELECTION: &str = "kiapi.common.commands.RemoveFromSelection";
+const CMD_CLEAR_SELECTION: &str = "kiapi.common.commands.ClearSelection";
+const CMD_BEGIN_COMMIT: &str = "kiapi.common.commands.BeginCommit";
+const CMD_END_COMMIT: &str = "kiapi.common.commands.EndCommit";
+const CMD_CREATE_ITEMS: &str = "kiapi.common.commands.CreateItems";
+const CMD_UPDATE_ITEMS: &str = "kiapi.common.commands.UpdateItems";
+const CMD_DELETE_ITEMS: &str = "kiapi.common.commands.DeleteItems";
+const CMD_PARSE_AND_CREATE_ITEMS_FROM_STRING: &str =
+    "kiapi.common.commands.ParseAndCreateItemsFromString";
 const CMD_GET_ITEMS: &str = "kiapi.common.commands.GetItems";
 const CMD_GET_ITEMS_BY_ID: &str = "kiapi.common.commands.GetItemsById";
 const CMD_GET_BOUNDING_BOX: &str = "kiapi.common.commands.GetBoundingBox";
 const CMD_HIT_TEST: &str = "kiapi.common.commands.HitTest";
 const CMD_GET_TITLE_BLOCK_INFO: &str = "kiapi.common.commands.GetTitleBlockInfo";
+const CMD_SAVE_DOCUMENT: &str = "kiapi.common.commands.SaveDocument";
+const CMD_SAVE_COPY_OF_DOCUMENT: &str = "kiapi.common.commands.SaveCopyOfDocument";
+const CMD_REVERT_DOCUMENT: &str = "kiapi.common.commands.RevertDocument";
 const CMD_SAVE_DOCUMENT_TO_STRING: &str = "kiapi.common.commands.SaveDocumentToString";
 const CMD_SAVE_SELECTION_TO_STRING: &str = "kiapi.common.commands.SaveSelectionToString";
 
 const RES_GET_VERSION: &str = "kiapi.common.commands.GetVersionResponse";
+const RES_PATH_RESPONSE: &str = "kiapi.common.commands.PathResponse";
+const RES_STRING_RESPONSE: &str = "kiapi.common.commands.StringResponse";
 const RES_NET_CLASSES_RESPONSE: &str = "kiapi.common.commands.NetClassesResponse";
 const RES_TEXT_VARIABLES: &str = "kiapi.common.project.TextVariables";
 const RES_EXPAND_TEXT_VARIABLES_RESPONSE: &str =
@@ -74,6 +106,7 @@ const RES_EXPAND_TEXT_VARIABLES_RESPONSE: &str =
 const RES_BOX2: &str = "kiapi.common.types.Box2";
 const RES_GET_TEXT_AS_SHAPES_RESPONSE: &str = "kiapi.common.commands.GetTextAsShapesResponse";
 const RES_GET_OPEN_DOCUMENTS: &str = "kiapi.common.commands.GetOpenDocumentsResponse";
+const RES_RUN_ACTION_RESPONSE: &str = "kiapi.common.commands.RunActionResponse";
 const RES_GET_NETS: &str = "kiapi.board.commands.NetsResponse";
 const RES_GET_BOARD_ENABLED_LAYERS: &str = "kiapi.board.commands.BoardEnabledLayersResponse";
 const RES_BOARD_LAYER_RESPONSE: &str = "kiapi.board.commands.BoardLayerResponse";
@@ -85,14 +118,21 @@ const RES_BOARD_EDITOR_APPEARANCE_SETTINGS: &str =
 const RES_NETCLASS_FOR_NETS_RESPONSE: &str = "kiapi.board.commands.NetClassForNetsResponse";
 const RES_PAD_SHAPE_AS_POLYGON_RESPONSE: &str = "kiapi.board.commands.PadShapeAsPolygonResponse";
 const RES_PADSTACK_PRESENCE_RESPONSE: &str = "kiapi.board.commands.PadstackPresenceResponse";
+const RES_INJECT_DRC_ERROR_RESPONSE: &str = "kiapi.board.commands.InjectDrcErrorResponse";
 const RES_VECTOR2: &str = "kiapi.common.types.Vector2";
 const RES_SELECTION_RESPONSE: &str = "kiapi.common.commands.SelectionResponse";
+const RES_BEGIN_COMMIT_RESPONSE: &str = "kiapi.common.commands.BeginCommitResponse";
+const RES_END_COMMIT_RESPONSE: &str = "kiapi.common.commands.EndCommitResponse";
+const RES_CREATE_ITEMS_RESPONSE: &str = "kiapi.common.commands.CreateItemsResponse";
+const RES_UPDATE_ITEMS_RESPONSE: &str = "kiapi.common.commands.UpdateItemsResponse";
+const RES_DELETE_ITEMS_RESPONSE: &str = "kiapi.common.commands.DeleteItemsResponse";
 const RES_GET_ITEMS_RESPONSE: &str = "kiapi.common.commands.GetItemsResponse";
 const RES_GET_BOUNDING_BOX_RESPONSE: &str = "kiapi.common.commands.GetBoundingBoxResponse";
 const RES_HIT_TEST_RESPONSE: &str = "kiapi.common.commands.HitTestResponse";
 const RES_TITLE_BLOCK_INFO: &str = "kiapi.common.types.TitleBlockInfo";
 const RES_SAVED_DOCUMENT_RESPONSE: &str = "kiapi.common.commands.SavedDocumentResponse";
 const RES_SAVED_SELECTION_RESPONSE: &str = "kiapi.common.commands.SavedSelectionResponse";
+const RES_PROTOBUF_EMPTY: &str = "google.protobuf.Empty";
 
 const PAD_QUERY_CHUNK_SIZE: usize = 256;
 
@@ -288,6 +328,40 @@ impl KiCadClient {
         Ok(())
     }
 
+    pub async fn refresh_editor(&self, frame: EditorFrameType) -> Result<(), KiCadError> {
+        let command = envelope::pack_any(
+            &common_commands::RefreshEditor {
+                frame: frame.to_proto(),
+            },
+            CMD_REFRESH_EDITOR,
+        );
+        self.send_command(command).await?;
+        Ok(())
+    }
+
+    pub async fn run_action_raw(
+        &self,
+        action: impl Into<String>,
+    ) -> Result<prost_types::Any, KiCadError> {
+        let command = common_commands::RunAction {
+            action: action.into(),
+        };
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_RUN_ACTION))
+            .await?;
+        response_payload_as_any(response, RES_RUN_ACTION_RESPONSE)
+    }
+
+    pub async fn run_action(
+        &self,
+        action: impl Into<String>,
+    ) -> Result<RunActionStatus, KiCadError> {
+        let payload = self.run_action_raw(action).await?;
+        let response: common_commands::RunActionResponse =
+            decode_any(&payload, RES_RUN_ACTION_RESPONSE)?;
+        Ok(map_run_action_status(response.status))
+    }
+
     pub async fn get_version(&self) -> Result<VersionInfo, KiCadError> {
         let command = envelope::pack_any(&common_commands::GetVersion {}, CMD_GET_VERSION);
         let response = self.send_command(command).await?;
@@ -305,6 +379,50 @@ impl KiCadClient {
             patch: version.patch,
             full_version: version.full_version,
         })
+    }
+
+    pub async fn get_kicad_binary_path_raw(
+        &self,
+        binary_name: impl Into<String>,
+    ) -> Result<prost_types::Any, KiCadError> {
+        let command = common_commands::GetKiCadBinaryPath {
+            binary_name: binary_name.into(),
+        };
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_GET_KICAD_BINARY_PATH))
+            .await?;
+        response_payload_as_any(response, RES_PATH_RESPONSE)
+    }
+
+    pub async fn get_kicad_binary_path(
+        &self,
+        binary_name: impl Into<String>,
+    ) -> Result<String, KiCadError> {
+        let payload = self.get_kicad_binary_path_raw(binary_name).await?;
+        let response: common_commands::PathResponse = decode_any(&payload, RES_PATH_RESPONSE)?;
+        Ok(response.path)
+    }
+
+    pub async fn get_plugin_settings_path_raw(
+        &self,
+        identifier: impl Into<String>,
+    ) -> Result<prost_types::Any, KiCadError> {
+        let command = common_commands::GetPluginSettingsPath {
+            identifier: identifier.into(),
+        };
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_GET_PLUGIN_SETTINGS_PATH))
+            .await?;
+        response_payload_as_any(response, RES_STRING_RESPONSE)
+    }
+
+    pub async fn get_plugin_settings_path(
+        &self,
+        identifier: impl Into<String>,
+    ) -> Result<String, KiCadError> {
+        let payload = self.get_plugin_settings_path_raw(identifier).await?;
+        let response: common_commands::StringResponse = decode_any(&payload, RES_STRING_RESPONSE)?;
+        Ok(response.response)
     }
 
     pub async fn get_open_documents(
@@ -351,6 +469,33 @@ impl KiCadClient {
         Ok(classes)
     }
 
+    pub async fn set_net_classes_raw(
+        &self,
+        net_classes: Vec<NetClassInfo>,
+        merge_mode: MapMergeMode,
+    ) -> Result<prost_types::Any, KiCadError> {
+        let command = common_commands::SetNetClasses {
+            net_classes: net_classes
+                .into_iter()
+                .map(net_class_info_to_proto)
+                .collect(),
+            merge_mode: map_merge_mode_to_proto(merge_mode),
+        };
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_SET_NET_CLASSES))
+            .await?;
+        response_payload_as_any(response, RES_PROTOBUF_EMPTY)
+    }
+
+    pub async fn set_net_classes(
+        &self,
+        net_classes: Vec<NetClassInfo>,
+        merge_mode: MapMergeMode,
+    ) -> Result<Vec<NetClassInfo>, KiCadError> {
+        let _ = self.set_net_classes_raw(net_classes, merge_mode).await?;
+        self.get_net_classes().await
+    }
+
     pub async fn get_text_variables_raw(&self) -> Result<prost_types::Any, KiCadError> {
         let command = common_commands::GetTextVariables {
             document: Some(self.current_board_document_proto().await?),
@@ -365,6 +510,33 @@ impl KiCadClient {
         let payload = self.get_text_variables_raw().await?;
         let response: common_project::TextVariables = decode_any(&payload, RES_TEXT_VARIABLES)?;
         Ok(response.variables.into_iter().collect())
+    }
+
+    pub async fn set_text_variables_raw(
+        &self,
+        variables: BTreeMap<String, String>,
+        merge_mode: MapMergeMode,
+    ) -> Result<prost_types::Any, KiCadError> {
+        let command = common_commands::SetTextVariables {
+            document: Some(self.current_board_document_proto().await?),
+            variables: Some(common_project::TextVariables {
+                variables: variables.into_iter().collect(),
+            }),
+            merge_mode: map_merge_mode_to_proto(merge_mode),
+        };
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_SET_TEXT_VARIABLES))
+            .await?;
+        response_payload_as_any(response, RES_PROTOBUF_EMPTY)
+    }
+
+    pub async fn set_text_variables(
+        &self,
+        variables: BTreeMap<String, String>,
+        merge_mode: MapMergeMode,
+    ) -> Result<BTreeMap<String, String>, KiCadError> {
+        let _ = self.set_text_variables_raw(variables, merge_mode).await?;
+        self.get_text_variables().await
     }
 
     pub async fn expand_text_variables_raw(
@@ -462,6 +634,208 @@ impl KiCadClient {
         Ok(!docs.is_empty())
     }
 
+    pub async fn begin_commit_raw(&self) -> Result<prost_types::Any, KiCadError> {
+        let command = common_commands::BeginCommit {};
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_BEGIN_COMMIT))
+            .await?;
+        response_payload_as_any(response, RES_BEGIN_COMMIT_RESPONSE)
+    }
+
+    pub async fn begin_commit(&self) -> Result<CommitSession, KiCadError> {
+        let payload = self.begin_commit_raw().await?;
+        let response: common_commands::BeginCommitResponse =
+            decode_any(&payload, RES_BEGIN_COMMIT_RESPONSE)?;
+        map_commit_session(response)
+    }
+
+    pub async fn end_commit_raw(
+        &self,
+        session: CommitSession,
+        action: CommitAction,
+        message: impl Into<String>,
+    ) -> Result<prost_types::Any, KiCadError> {
+        if session.id.is_empty() {
+            return Err(KiCadError::Config {
+                reason: "end_commit_raw requires a non-empty commit session id".to_string(),
+            });
+        }
+
+        let command = common_commands::EndCommit {
+            id: Some(common_types::Kiid { value: session.id }),
+            action: commit_action_to_proto(action),
+            message: message.into(),
+        };
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_END_COMMIT))
+            .await?;
+        response_payload_as_any(response, RES_END_COMMIT_RESPONSE)
+    }
+
+    pub async fn end_commit(
+        &self,
+        session: CommitSession,
+        action: CommitAction,
+        message: impl Into<String>,
+    ) -> Result<(), KiCadError> {
+        self.end_commit_raw(session, action, message).await?;
+        Ok(())
+    }
+
+    pub async fn create_items_raw(
+        &self,
+        items: Vec<prost_types::Any>,
+        container_id: Option<String>,
+    ) -> Result<prost_types::Any, KiCadError> {
+        let command = common_commands::CreateItems {
+            header: Some(self.current_board_item_header().await?),
+            items,
+            container: container_id.map(|value| common_types::Kiid { value }),
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_CREATE_ITEMS))
+            .await?;
+        response_payload_as_any(response, RES_CREATE_ITEMS_RESPONSE)
+    }
+
+    pub async fn create_items(
+        &self,
+        items: Vec<prost_types::Any>,
+        container_id: Option<String>,
+    ) -> Result<Vec<prost_types::Any>, KiCadError> {
+        let payload = self.create_items_raw(items, container_id).await?;
+        let response: common_commands::CreateItemsResponse =
+            decode_any(&payload, RES_CREATE_ITEMS_RESPONSE)?;
+        ensure_item_request_ok(response.status)?;
+
+        response
+            .created_items
+            .into_iter()
+            .map(|row| {
+                ensure_item_status_ok(row.status)?;
+                row.item.ok_or_else(|| KiCadError::InvalidResponse {
+                    reason: "CreateItemsResponse missing created item payload".to_string(),
+                })
+            })
+            .collect()
+    }
+
+    pub async fn update_items_raw(
+        &self,
+        items: Vec<prost_types::Any>,
+    ) -> Result<prost_types::Any, KiCadError> {
+        let command = common_commands::UpdateItems {
+            header: Some(self.current_board_item_header().await?),
+            items,
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_UPDATE_ITEMS))
+            .await?;
+        response_payload_as_any(response, RES_UPDATE_ITEMS_RESPONSE)
+    }
+
+    pub async fn update_items(
+        &self,
+        items: Vec<prost_types::Any>,
+    ) -> Result<Vec<prost_types::Any>, KiCadError> {
+        let payload = self.update_items_raw(items).await?;
+        let response: common_commands::UpdateItemsResponse =
+            decode_any(&payload, RES_UPDATE_ITEMS_RESPONSE)?;
+        ensure_item_request_ok(response.status)?;
+
+        response
+            .updated_items
+            .into_iter()
+            .map(|row| {
+                ensure_item_status_ok(row.status)?;
+                row.item.ok_or_else(|| KiCadError::InvalidResponse {
+                    reason: "UpdateItemsResponse missing updated item payload".to_string(),
+                })
+            })
+            .collect()
+    }
+
+    pub async fn delete_items_raw(
+        &self,
+        item_ids: Vec<String>,
+    ) -> Result<prost_types::Any, KiCadError> {
+        let command = common_commands::DeleteItems {
+            header: Some(self.current_board_item_header().await?),
+            item_ids: item_ids
+                .into_iter()
+                .map(|value| common_types::Kiid { value })
+                .collect(),
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_DELETE_ITEMS))
+            .await?;
+        response_payload_as_any(response, RES_DELETE_ITEMS_RESPONSE)
+    }
+
+    pub async fn delete_items(&self, item_ids: Vec<String>) -> Result<Vec<String>, KiCadError> {
+        let payload = self.delete_items_raw(item_ids).await?;
+        let response: common_commands::DeleteItemsResponse =
+            decode_any(&payload, RES_DELETE_ITEMS_RESPONSE)?;
+        ensure_item_request_ok(response.status)?;
+
+        response
+            .deleted_items
+            .into_iter()
+            .map(|row| {
+                ensure_item_deletion_status_ok(row.status)?;
+                row.id
+                    .map(|id| id.value)
+                    .ok_or_else(|| KiCadError::InvalidResponse {
+                        reason: "DeleteItemsResponse missing deleted item id".to_string(),
+                    })
+            })
+            .collect()
+    }
+
+    pub async fn parse_and_create_items_from_string_raw(
+        &self,
+        contents: impl Into<String>,
+    ) -> Result<prost_types::Any, KiCadError> {
+        let command = common_commands::ParseAndCreateItemsFromString {
+            document: Some(self.current_board_document_proto().await?),
+            contents: contents.into(),
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(
+                &command,
+                CMD_PARSE_AND_CREATE_ITEMS_FROM_STRING,
+            ))
+            .await?;
+        response_payload_as_any(response, RES_CREATE_ITEMS_RESPONSE)
+    }
+
+    pub async fn parse_and_create_items_from_string(
+        &self,
+        contents: impl Into<String>,
+    ) -> Result<Vec<prost_types::Any>, KiCadError> {
+        let payload = self
+            .parse_and_create_items_from_string_raw(contents)
+            .await?;
+        let response: common_commands::CreateItemsResponse =
+            decode_any(&payload, RES_CREATE_ITEMS_RESPONSE)?;
+        ensure_item_request_ok(response.status)?;
+
+        response
+            .created_items
+            .into_iter()
+            .map(|row| {
+                ensure_item_status_ok(row.status)?;
+                row.item.ok_or_else(|| KiCadError::InvalidResponse {
+                    reason: "CreateItemsResponse missing created item payload".to_string(),
+                })
+            })
+            .collect()
+    }
+
     pub async fn get_nets(&self) -> Result<Vec<BoardNet>, KiCadError> {
         let board = self.current_board_document_proto().await?;
         let command = board_commands::GetNets {
@@ -496,10 +870,28 @@ impl KiCadClient {
         let payload: board_commands::BoardEnabledLayersResponse =
             envelope::unpack_any(&response, RES_GET_BOARD_ENABLED_LAYERS)?;
 
-        Ok(BoardEnabledLayers {
-            copper_layer_count: payload.copper_layer_count,
-            layers: payload.layers.into_iter().map(layer_to_model).collect(),
-        })
+        Ok(map_board_enabled_layers_response(payload))
+    }
+
+    pub async fn set_board_enabled_layers(
+        &self,
+        copper_layer_count: u32,
+        layer_ids: Vec<i32>,
+    ) -> Result<BoardEnabledLayers, KiCadError> {
+        let board = self.current_board_document_proto().await?;
+        let command = board_commands::SetBoardEnabledLayers {
+            board: Some(board),
+            copper_layer_count,
+            layers: layer_ids,
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_SET_BOARD_ENABLED_LAYERS))
+            .await?;
+
+        let payload: board_commands::BoardEnabledLayersResponse =
+            envelope::unpack_any(&response, RES_GET_BOARD_ENABLED_LAYERS)?;
+        Ok(map_board_enabled_layers_response(payload))
     }
 
     pub async fn get_active_layer(&self) -> Result<BoardLayerInfo, KiCadError> {
@@ -516,6 +908,18 @@ impl KiCadClient {
         Ok(layer_to_model(payload.layer))
     }
 
+    pub async fn set_active_layer(&self, layer_id: i32) -> Result<(), KiCadError> {
+        let board = self.current_board_document_proto().await?;
+        let command = board_commands::SetActiveLayer {
+            board: Some(board),
+            layer: layer_id,
+        };
+
+        self.send_command(envelope::pack_any(&command, CMD_SET_ACTIVE_LAYER))
+            .await?;
+        Ok(())
+    }
+
     pub async fn get_visible_layers(&self) -> Result<Vec<BoardLayerInfo>, KiCadError> {
         let board = self.current_board_document_proto().await?;
         let command = board_commands::GetVisibleLayers { board: Some(board) };
@@ -528,6 +932,18 @@ impl KiCadClient {
             envelope::unpack_any(&response, RES_BOARD_LAYERS)?;
 
         Ok(payload.layers.into_iter().map(layer_to_model).collect())
+    }
+
+    pub async fn set_visible_layers(&self, layer_ids: Vec<i32>) -> Result<(), KiCadError> {
+        let board = self.current_board_document_proto().await?;
+        let command = board_commands::SetVisibleLayers {
+            board: Some(board),
+            layers: layer_ids,
+        };
+
+        self.send_command(envelope::pack_any(&command, CMD_SET_VISIBLE_LAYERS))
+            .await?;
+        Ok(())
     }
 
     pub async fn get_board_origin(&self, kind: BoardOriginKind) -> Result<Vector2Nm, KiCadError> {
@@ -546,6 +962,23 @@ impl KiCadClient {
             x_nm: payload.x_nm,
             y_nm: payload.y_nm,
         })
+    }
+
+    pub async fn set_board_origin(
+        &self,
+        kind: BoardOriginKind,
+        origin: Vector2Nm,
+    ) -> Result<(), KiCadError> {
+        let board = self.current_board_document_proto().await?;
+        let command = board_commands::SetBoardOrigin {
+            board: Some(board),
+            r#type: board_origin_kind_to_proto(kind),
+            origin: Some(vector2_nm_to_proto(origin)),
+        };
+
+        self.send_command(envelope::pack_any(&command, CMD_SET_BOARD_ORIGIN))
+            .await?;
+        Ok(())
     }
 
     pub async fn get_selection_summary(&self) -> Result<SelectionSummary, KiCadError> {
@@ -593,6 +1026,107 @@ impl KiCadClient {
     pub async fn get_selection(&self) -> Result<Vec<PcbItem>, KiCadError> {
         let items = self.get_selection_raw().await?;
         decode_pcb_items(items)
+    }
+
+    pub async fn add_to_selection_raw(
+        &self,
+        item_ids: Vec<String>,
+    ) -> Result<Vec<prost_types::Any>, KiCadError> {
+        let command = common_commands::AddToSelection {
+            header: Some(self.current_board_item_header().await?),
+            items: item_ids
+                .into_iter()
+                .map(|value| common_types::Kiid { value })
+                .collect(),
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_ADD_TO_SELECTION))
+            .await?;
+
+        match envelope::unpack_any::<common_commands::SelectionResponse>(
+            &response,
+            RES_SELECTION_RESPONSE,
+        ) {
+            Ok(payload) => Ok(payload.items),
+            Err(KiCadError::UnexpectedPayloadType {
+                expected_type_url: _,
+                actual_type_url,
+            }) if actual_type_url == envelope::type_url(RES_PROTOBUF_EMPTY) => Ok(Vec::new()),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn add_to_selection(
+        &self,
+        item_ids: Vec<String>,
+    ) -> Result<SelectionSummary, KiCadError> {
+        let items = self.add_to_selection_raw(item_ids).await?;
+        Ok(summarize_selection(items))
+    }
+
+    pub async fn clear_selection_raw(&self) -> Result<Vec<prost_types::Any>, KiCadError> {
+        let command = common_commands::ClearSelection {
+            header: Some(self.current_board_item_header().await?),
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_CLEAR_SELECTION))
+            .await?;
+
+        match envelope::unpack_any::<common_commands::SelectionResponse>(
+            &response,
+            RES_SELECTION_RESPONSE,
+        ) {
+            Ok(payload) => Ok(payload.items),
+            Err(KiCadError::UnexpectedPayloadType {
+                expected_type_url: _,
+                actual_type_url,
+            }) if actual_type_url == envelope::type_url(RES_PROTOBUF_EMPTY) => Ok(Vec::new()),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn clear_selection(&self) -> Result<SelectionSummary, KiCadError> {
+        let items = self.clear_selection_raw().await?;
+        Ok(summarize_selection(items))
+    }
+
+    pub async fn remove_from_selection_raw(
+        &self,
+        item_ids: Vec<String>,
+    ) -> Result<Vec<prost_types::Any>, KiCadError> {
+        let command = common_commands::RemoveFromSelection {
+            header: Some(self.current_board_item_header().await?),
+            items: item_ids
+                .into_iter()
+                .map(|value| common_types::Kiid { value })
+                .collect(),
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_REMOVE_FROM_SELECTION))
+            .await?;
+
+        match envelope::unpack_any::<common_commands::SelectionResponse>(
+            &response,
+            RES_SELECTION_RESPONSE,
+        ) {
+            Ok(payload) => Ok(payload.items),
+            Err(KiCadError::UnexpectedPayloadType {
+                expected_type_url: _,
+                actual_type_url,
+            }) if actual_type_url == envelope::type_url(RES_PROTOBUF_EMPTY) => Ok(Vec::new()),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn remove_from_selection(
+        &self,
+        item_ids: Vec<String>,
+    ) -> Result<SelectionSummary, KiCadError> {
+        let items = self.remove_from_selection_raw(item_ids).await?;
+        Ok(summarize_selection(items))
     }
 
     pub async fn get_pad_netlist(&self) -> Result<Vec<PadNetEntry>, KiCadError> {
@@ -770,6 +1304,23 @@ impl KiCadClient {
         Ok(map_netclass_for_nets_response(response))
     }
 
+    pub async fn refill_zones(&self, zone_ids: Vec<String>) -> Result<(), KiCadError> {
+        let board = self.current_board_document_proto().await?;
+        let command = board_commands::RefillZones {
+            board: Some(board),
+            zones: zone_ids
+                .into_iter()
+                .map(|value| common_types::Kiid { value })
+                .collect(),
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_REFILL_ZONES))
+            .await?;
+        let _ = response_payload_as_any(response, RES_PROTOBUF_EMPTY)?;
+        Ok(())
+    }
+
     pub async fn get_pad_shape_as_polygon_raw(
         &self,
         pad_ids: Vec<String>,
@@ -916,6 +1467,46 @@ impl KiCadClient {
         Ok(entries)
     }
 
+    pub async fn inject_drc_error_raw(
+        &self,
+        severity: DrcSeverity,
+        message: impl Into<String>,
+        position: Option<Vector2Nm>,
+        item_ids: Vec<String>,
+    ) -> Result<prost_types::Any, KiCadError> {
+        let board = self.current_board_document_proto().await?;
+        let command = board_commands::InjectDrcError {
+            board: Some(board),
+            severity: drc_severity_to_proto(severity),
+            message: message.into(),
+            position: position.map(vector2_nm_to_proto),
+            items: item_ids
+                .into_iter()
+                .map(|value| common_types::Kiid { value })
+                .collect(),
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_INJECT_DRC_ERROR))
+            .await?;
+        response_payload_as_any(response, RES_INJECT_DRC_ERROR_RESPONSE)
+    }
+
+    pub async fn inject_drc_error(
+        &self,
+        severity: DrcSeverity,
+        message: impl Into<String>,
+        position: Option<Vector2Nm>,
+        item_ids: Vec<String>,
+    ) -> Result<Option<String>, KiCadError> {
+        let payload = self
+            .inject_drc_error_raw(severity, message, position, item_ids)
+            .await?;
+        let response: board_commands::InjectDrcErrorResponse =
+            decode_any(&payload, RES_INJECT_DRC_ERROR_RESPONSE)?;
+        Ok(response.marker.map(|marker| marker.value))
+    }
+
     pub async fn get_board_stackup_raw(&self) -> Result<prost_types::Any, KiCadError> {
         let command = board_commands::GetBoardStackup {
             board: Some(self.current_board_document_proto().await?),
@@ -930,6 +1521,32 @@ impl KiCadClient {
 
     pub async fn get_board_stackup(&self) -> Result<BoardStackup, KiCadError> {
         let payload = self.get_board_stackup_raw().await?;
+        let response: board_commands::BoardStackupResponse =
+            decode_any(&payload, RES_BOARD_STACKUP_RESPONSE)?;
+        Ok(map_board_stackup(response.stackup.unwrap_or_default()))
+    }
+
+    pub async fn update_board_stackup_raw(
+        &self,
+        stackup: BoardStackup,
+    ) -> Result<prost_types::Any, KiCadError> {
+        let command = board_commands::UpdateBoardStackup {
+            board: Some(self.current_board_document_proto().await?),
+            stackup: Some(board_stackup_to_proto(stackup)),
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_UPDATE_BOARD_STACKUP))
+            .await?;
+
+        response_payload_as_any(response, RES_BOARD_STACKUP_RESPONSE)
+    }
+
+    pub async fn update_board_stackup(
+        &self,
+        stackup: BoardStackup,
+    ) -> Result<BoardStackup, KiCadError> {
+        let payload = self.update_board_stackup_raw(stackup).await?;
         let response: board_commands::BoardStackupResponse =
             decode_any(&payload, RES_BOARD_STACKUP_RESPONSE)?;
         Ok(map_board_stackup(response.stackup.unwrap_or_default()))
@@ -978,6 +1595,53 @@ impl KiCadClient {
         Ok(map_board_editor_appearance_settings(response))
     }
 
+    pub async fn set_board_editor_appearance_settings(
+        &self,
+        settings: BoardEditorAppearanceSettings,
+    ) -> Result<BoardEditorAppearanceSettings, KiCadError> {
+        let command = board_commands::SetBoardEditorAppearanceSettings {
+            settings: Some(board_editor_appearance_settings_to_proto(settings)),
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(
+                &command,
+                CMD_SET_BOARD_EDITOR_APPEARANCE_SETTINGS,
+            ))
+            .await?;
+        let _ = response_payload_as_any(response, RES_PROTOBUF_EMPTY)?;
+        self.get_board_editor_appearance_settings().await
+    }
+
+    pub async fn interactive_move_items_raw(
+        &self,
+        item_ids: Vec<String>,
+    ) -> Result<prost_types::Any, KiCadError> {
+        if item_ids.is_empty() {
+            return Err(KiCadError::Config {
+                reason: "interactive_move_items_raw requires at least one item id".to_string(),
+            });
+        }
+
+        let command = board_commands::InteractiveMoveItems {
+            board: Some(self.current_board_document_proto().await?),
+            items: item_ids
+                .into_iter()
+                .map(|value| common_types::Kiid { value })
+                .collect(),
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_INTERACTIVE_MOVE_ITEMS))
+            .await?;
+        response_payload_as_any(response, RES_PROTOBUF_EMPTY)
+    }
+
+    pub async fn interactive_move_items(&self, item_ids: Vec<String>) -> Result<(), KiCadError> {
+        let _ = self.interactive_move_items_raw(item_ids).await?;
+        Ok(())
+    }
+
     pub async fn get_title_block_info(&self) -> Result<TitleBlockInfo, KiCadError> {
         let command = common_commands::GetTitleBlockInfo {
             document: Some(self.current_board_document_proto().await?),
@@ -1011,6 +1675,71 @@ impl KiCadClient {
             company: payload.company,
             comments,
         })
+    }
+
+    pub async fn save_document_raw(&self) -> Result<prost_types::Any, KiCadError> {
+        let command = common_commands::SaveDocument {
+            document: Some(self.current_board_document_proto().await?),
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_SAVE_DOCUMENT))
+            .await?;
+        response_payload_as_any(response, RES_PROTOBUF_EMPTY)
+    }
+
+    pub async fn save_document(&self) -> Result<(), KiCadError> {
+        let _ = self.save_document_raw().await?;
+        Ok(())
+    }
+
+    pub async fn save_copy_of_document_raw(
+        &self,
+        path: impl Into<String>,
+        overwrite: bool,
+        include_project: bool,
+    ) -> Result<prost_types::Any, KiCadError> {
+        let command = common_commands::SaveCopyOfDocument {
+            document: Some(self.current_board_document_proto().await?),
+            path: path.into(),
+            options: Some(common_commands::SaveOptions {
+                overwrite,
+                include_project,
+            }),
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_SAVE_COPY_OF_DOCUMENT))
+            .await?;
+        response_payload_as_any(response, RES_PROTOBUF_EMPTY)
+    }
+
+    pub async fn save_copy_of_document(
+        &self,
+        path: impl Into<String>,
+        overwrite: bool,
+        include_project: bool,
+    ) -> Result<(), KiCadError> {
+        let _ = self
+            .save_copy_of_document_raw(path, overwrite, include_project)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn revert_document_raw(&self) -> Result<prost_types::Any, KiCadError> {
+        let command = common_commands::RevertDocument {
+            document: Some(self.current_board_document_proto().await?),
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_REVERT_DOCUMENT))
+            .await?;
+        response_payload_as_any(response, RES_PROTOBUF_EMPTY)
+    }
+
+    pub async fn revert_document(&self) -> Result<(), KiCadError> {
+        let _ = self.revert_document_raw().await?;
+        Ok(())
     }
 
     pub async fn get_board_as_string(&self) -> Result<String, KiCadError> {
@@ -1509,10 +2238,46 @@ fn layer_to_model(layer_id: i32) -> BoardLayerInfo {
     BoardLayerInfo { id: layer_id, name }
 }
 
+fn map_board_enabled_layers_response(
+    payload: board_commands::BoardEnabledLayersResponse,
+) -> BoardEnabledLayers {
+    BoardEnabledLayers {
+        copper_layer_count: payload.copper_layer_count,
+        layers: payload.layers.into_iter().map(layer_to_model).collect(),
+    }
+}
+
 fn board_origin_kind_to_proto(kind: BoardOriginKind) -> i32 {
     match kind {
         BoardOriginKind::Grid => board_commands::BoardOriginType::BotGrid as i32,
         BoardOriginKind::Drill => board_commands::BoardOriginType::BotDrill as i32,
+    }
+}
+
+fn drc_severity_to_proto(value: DrcSeverity) -> i32 {
+    match value {
+        DrcSeverity::Warning => board_commands::DrcSeverity::DrsWarning as i32,
+        DrcSeverity::Error => board_commands::DrcSeverity::DrsError as i32,
+        DrcSeverity::Exclusion => board_commands::DrcSeverity::DrsExclusion as i32,
+        DrcSeverity::Ignore => board_commands::DrcSeverity::DrsIgnore as i32,
+        DrcSeverity::Info => board_commands::DrcSeverity::DrsInfo as i32,
+        DrcSeverity::Action => board_commands::DrcSeverity::DrsAction as i32,
+        DrcSeverity::Debug => board_commands::DrcSeverity::DrsDebug as i32,
+        DrcSeverity::Undefined => board_commands::DrcSeverity::DrsUndefined as i32,
+    }
+}
+
+fn commit_action_to_proto(action: CommitAction) -> i32 {
+    match action {
+        CommitAction::Commit => common_commands::CommitAction::CmaCommit as i32,
+        CommitAction::Drop => common_commands::CommitAction::CmaDrop as i32,
+    }
+}
+
+fn map_merge_mode_to_proto(value: MapMergeMode) -> i32 {
+    match value {
+        MapMergeMode::Merge => common_types::MapMergeMode::MmmMerge as i32,
+        MapMergeMode::Replace => common_types::MapMergeMode::MmmReplace as i32,
     }
 }
 
@@ -1551,6 +2316,22 @@ fn summarize_item_details(
     Ok(details)
 }
 
+fn map_commit_session(
+    response: common_commands::BeginCommitResponse,
+) -> Result<CommitSession, KiCadError> {
+    let id = response.id.ok_or_else(|| KiCadError::InvalidResponse {
+        reason: "BeginCommit response missing commit id".to_string(),
+    })?;
+
+    if id.value.is_empty() {
+        return Err(KiCadError::InvalidResponse {
+            reason: "BeginCommit response returned empty commit id".to_string(),
+        });
+    }
+
+    Ok(CommitSession { id: id.value })
+}
+
 fn ensure_item_request_ok(status: i32) -> Result<(), KiCadError> {
     let request_status = common_types::ItemRequestStatus::try_from(status)
         .unwrap_or(common_types::ItemRequestStatus::IrsUnknown);
@@ -1558,6 +2339,37 @@ fn ensure_item_request_ok(status: i32) -> Result<(), KiCadError> {
     if request_status != common_types::ItemRequestStatus::IrsOk {
         return Err(KiCadError::ItemStatus {
             code: request_status.as_str_name().to_string(),
+        });
+    }
+
+    Ok(())
+}
+
+fn ensure_item_status_ok(status: Option<common_commands::ItemStatus>) -> Result<(), KiCadError> {
+    let status = status.unwrap_or_default();
+    let code = common_commands::ItemStatusCode::try_from(status.code)
+        .unwrap_or(common_commands::ItemStatusCode::IscUnknown);
+
+    if code != common_commands::ItemStatusCode::IscOk {
+        let detail = if status.error_message.is_empty() {
+            code.as_str_name().to_string()
+        } else {
+            format!("{}: {}", code.as_str_name(), status.error_message)
+        };
+
+        return Err(KiCadError::ItemStatus { code: detail });
+    }
+
+    Ok(())
+}
+
+fn ensure_item_deletion_status_ok(status: i32) -> Result<(), KiCadError> {
+    let code = common_commands::ItemDeletionStatus::try_from(status)
+        .unwrap_or(common_commands::ItemDeletionStatus::IdsUnknown);
+
+    if code != common_commands::ItemDeletionStatus::IdsOk {
+        return Err(KiCadError::ItemStatus {
+            code: code.as_str_name().to_string(),
         });
     }
 
@@ -1597,6 +2409,18 @@ fn map_hit_test_result(value: i32) -> ItemHitTestResult {
         common_commands::HitTestResult::HtrHit => ItemHitTestResult::Hit,
         common_commands::HitTestResult::HtrNoHit => ItemHitTestResult::NoHit,
         common_commands::HitTestResult::HtrUnknown => ItemHitTestResult::Unknown,
+    }
+}
+
+fn map_run_action_status(value: i32) -> RunActionStatus {
+    let status = common_commands::RunActionStatus::try_from(value)
+        .unwrap_or(common_commands::RunActionStatus::RasUnknown);
+
+    match status {
+        common_commands::RunActionStatus::RasOk => RunActionStatus::Ok,
+        common_commands::RunActionStatus::RasInvalid => RunActionStatus::Invalid,
+        common_commands::RunActionStatus::RasFrameNotOpen => RunActionStatus::FrameNotOpen,
+        common_commands::RunActionStatus::RasUnknown => RunActionStatus::Unknown(value),
     }
 }
 
@@ -1743,6 +2567,28 @@ fn map_board_stackup_layer_type(value: i32) -> BoardStackupLayerType {
     }
 }
 
+fn board_stackup_layer_type_to_proto(value: BoardStackupLayerType) -> i32 {
+    match value {
+        BoardStackupLayerType::Copper => board_proto::BoardStackupLayerType::BsltCopper as i32,
+        BoardStackupLayerType::Dielectric => {
+            board_proto::BoardStackupLayerType::BsltDielectric as i32
+        }
+        BoardStackupLayerType::Silkscreen => {
+            board_proto::BoardStackupLayerType::BsltSilkscreen as i32
+        }
+        BoardStackupLayerType::SolderMask => {
+            board_proto::BoardStackupLayerType::BsltSoldermask as i32
+        }
+        BoardStackupLayerType::SolderPaste => {
+            board_proto::BoardStackupLayerType::BsltSolderpaste as i32
+        }
+        BoardStackupLayerType::Undefined => {
+            board_proto::BoardStackupLayerType::BsltUndefined as i32
+        }
+        BoardStackupLayerType::Unknown(value) => value,
+    }
+}
+
 fn map_board_layer_class(value: i32) -> BoardLayerClass {
     match board_proto::BoardLayerClass::try_from(value) {
         Ok(board_proto::BoardLayerClass::BlcSilkscreen) => BoardLayerClass::Silkscreen,
@@ -1770,6 +2616,21 @@ fn map_inactive_layer_display_mode(value: i32) -> InactiveLayerDisplayMode {
     }
 }
 
+fn inactive_layer_display_mode_to_proto(value: InactiveLayerDisplayMode) -> i32 {
+    match value {
+        InactiveLayerDisplayMode::Normal => {
+            board_commands::InactiveLayerDisplayMode::IldmNormal as i32
+        }
+        InactiveLayerDisplayMode::Dimmed => {
+            board_commands::InactiveLayerDisplayMode::IldmDimmed as i32
+        }
+        InactiveLayerDisplayMode::Hidden => {
+            board_commands::InactiveLayerDisplayMode::IldmHidden as i32
+        }
+        InactiveLayerDisplayMode::Unknown(value) => value,
+    }
+}
+
 fn map_net_color_display_mode(value: i32) -> NetColorDisplayMode {
     match board_commands::NetColorDisplayMode::try_from(value) {
         Ok(board_commands::NetColorDisplayMode::NcdmAll) => NetColorDisplayMode::All,
@@ -1779,11 +2640,28 @@ fn map_net_color_display_mode(value: i32) -> NetColorDisplayMode {
     }
 }
 
+fn net_color_display_mode_to_proto(value: NetColorDisplayMode) -> i32 {
+    match value {
+        NetColorDisplayMode::All => board_commands::NetColorDisplayMode::NcdmAll as i32,
+        NetColorDisplayMode::Ratsnest => board_commands::NetColorDisplayMode::NcdmRatsnest as i32,
+        NetColorDisplayMode::Off => board_commands::NetColorDisplayMode::NcdmOff as i32,
+        NetColorDisplayMode::Unknown(value) => value,
+    }
+}
+
 fn map_board_flip_mode(value: i32) -> BoardFlipMode {
     match board_commands::BoardFlipMode::try_from(value) {
         Ok(board_commands::BoardFlipMode::BfmNormal) => BoardFlipMode::Normal,
         Ok(board_commands::BoardFlipMode::BfmFlippedX) => BoardFlipMode::FlippedX,
         _ => BoardFlipMode::Unknown(value),
+    }
+}
+
+fn board_flip_mode_to_proto(value: BoardFlipMode) -> i32 {
+    match value {
+        BoardFlipMode::Normal => board_commands::BoardFlipMode::BfmNormal as i32,
+        BoardFlipMode::FlippedX => board_commands::BoardFlipMode::BfmFlippedX as i32,
+        BoardFlipMode::Unknown(value) => value,
     }
 }
 
@@ -1797,6 +2675,16 @@ fn map_ratsnest_display_mode(value: i32) -> RatsnestDisplayMode {
     }
 }
 
+fn ratsnest_display_mode_to_proto(value: RatsnestDisplayMode) -> i32 {
+    match value {
+        RatsnestDisplayMode::AllLayers => board_commands::RatsnestDisplayMode::RdmAllLayers as i32,
+        RatsnestDisplayMode::VisibleLayers => {
+            board_commands::RatsnestDisplayMode::RdmVisibleLayers as i32
+        }
+        RatsnestDisplayMode::Unknown(value) => value,
+    }
+}
+
 fn map_board_stackup(stackup: board_proto::BoardStackup) -> BoardStackup {
     let finish_type_name = stackup
         .finish
@@ -1807,6 +2695,7 @@ fn map_board_stackup(stackup: board_proto::BoardStackup) -> BoardStackup {
         .map(|impedance| impedance.is_controlled)
         .unwrap_or(false);
     let edge = stackup.edge.unwrap_or_default();
+    let edge_has_connector = edge.connector.is_some();
     let edge_has_castellated_pads = edge
         .castellation
         .map(|value| value.has_castellated_pads)
@@ -1845,9 +2734,72 @@ fn map_board_stackup(stackup: board_proto::BoardStackup) -> BoardStackup {
     BoardStackup {
         finish_type_name,
         impedance_controlled,
+        edge_has_connector,
         edge_has_castellated_pads,
         edge_has_edge_plating,
         layers,
+    }
+}
+
+fn board_stackup_to_proto(stackup: BoardStackup) -> board_proto::BoardStackup {
+    board_proto::BoardStackup {
+        finish: (!stackup.finish_type_name.is_empty()).then_some(board_proto::BoardFinish {
+            type_name: stackup.finish_type_name,
+        }),
+        impedance: Some(board_proto::BoardImpedanceControl {
+            is_controlled: stackup.impedance_controlled,
+        }),
+        edge: Some(board_proto::BoardEdgeSettings {
+            connector: stackup
+                .edge_has_connector
+                .then_some(board_proto::BoardEdgeConnector {}),
+            castellation: Some(board_proto::Castellation {
+                has_castellated_pads: stackup.edge_has_castellated_pads,
+            }),
+            plating: Some(board_proto::EdgePlating {
+                has_edge_plating: stackup.edge_has_edge_plating,
+            }),
+        }),
+        layers: stackup
+            .layers
+            .into_iter()
+            .map(board_stackup_layer_to_proto)
+            .collect(),
+    }
+}
+
+fn board_stackup_layer_to_proto(layer: BoardStackupLayer) -> board_proto::BoardStackupLayer {
+    board_proto::BoardStackupLayer {
+        thickness: layer
+            .thickness_nm
+            .map(|value_nm| common_types::Distance { value_nm }),
+        layer: layer.layer.id,
+        enabled: layer.enabled,
+        r#type: board_stackup_layer_type_to_proto(layer.layer_type),
+        dielectric: (!layer.dielectric_layers.is_empty()).then(|| {
+            board_proto::BoardStackupDielectricLayer {
+                layer: layer
+                    .dielectric_layers
+                    .into_iter()
+                    .map(|dielectric| board_proto::BoardStackupDielectricProperties {
+                        epsilon_r: dielectric.epsilon_r,
+                        loss_tangent: dielectric.loss_tangent,
+                        material_name: dielectric.material_name,
+                        thickness: dielectric
+                            .thickness_nm
+                            .map(|value_nm| common_types::Distance { value_nm }),
+                    })
+                    .collect(),
+            }
+        }),
+        color: layer.color.map(|color| common_types::Color {
+            r: color.r,
+            g: color.g,
+            b: color.b,
+            a: color.a,
+        }),
+        material_name: layer.material_name,
+        user_name: layer.user_name,
     }
 }
 
@@ -1883,6 +2835,75 @@ fn map_board_editor_appearance_settings(
         net_color_display: map_net_color_display_mode(settings.net_color_display),
         board_flip: map_board_flip_mode(settings.board_flip),
         ratsnest_display: map_ratsnest_display_mode(settings.ratsnest_display),
+    }
+}
+
+fn board_editor_appearance_settings_to_proto(
+    settings: BoardEditorAppearanceSettings,
+) -> board_commands::BoardEditorAppearanceSettings {
+    board_commands::BoardEditorAppearanceSettings {
+        inactive_layer_display: inactive_layer_display_mode_to_proto(
+            settings.inactive_layer_display,
+        ),
+        net_color_display: net_color_display_mode_to_proto(settings.net_color_display),
+        board_flip: board_flip_mode_to_proto(settings.board_flip),
+        ratsnest_display: ratsnest_display_mode_to_proto(settings.ratsnest_display),
+    }
+}
+
+fn net_class_type_to_proto(value: NetClassType) -> i32 {
+    match value {
+        NetClassType::Explicit => common_project::NetClassType::NctExplicit as i32,
+        NetClassType::Implicit => common_project::NetClassType::NctImplicit as i32,
+        NetClassType::Unknown(raw) => raw,
+    }
+}
+
+fn net_class_info_to_proto(value: NetClassInfo) -> common_project::NetClass {
+    let board = value
+        .board
+        .map(|board| common_project::NetClassBoardSettings {
+            clearance: board
+                .clearance_nm
+                .map(|value_nm| common_types::Distance { value_nm }),
+            track_width: board
+                .track_width_nm
+                .map(|value_nm| common_types::Distance { value_nm }),
+            diff_pair_track_width: board
+                .diff_pair_track_width_nm
+                .map(|value_nm| common_types::Distance { value_nm }),
+            diff_pair_gap: board
+                .diff_pair_gap_nm
+                .map(|value_nm| common_types::Distance { value_nm }),
+            diff_pair_via_gap: board
+                .diff_pair_via_gap_nm
+                .map(|value_nm| common_types::Distance { value_nm }),
+            via_stack: if board.has_via_stack {
+                Some(board_types::PadStack::default())
+            } else {
+                None
+            },
+            microvia_stack: if board.has_microvia_stack {
+                Some(board_types::PadStack::default())
+            } else {
+                None
+            },
+            color: board.color.map(|color| common_types::Color {
+                r: color.r,
+                g: color.g,
+                b: color.b,
+                a: color.a,
+            }),
+            tuning_profile: board.tuning_profile,
+        });
+
+    common_project::NetClass {
+        name: value.name,
+        priority: value.priority,
+        board,
+        schematic: None,
+        r#type: net_class_type_to_proto(value.class_type),
+        constituents: value.constituents,
     }
 }
 
@@ -2617,17 +3638,23 @@ fn default_client_name() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        any_to_pretty_debug, ensure_item_request_ok, layer_to_model, map_hit_test_result,
-        map_item_bounding_boxes, map_polygon_with_holes, model_document_to_proto,
-        normalize_socket_uri, pad_netlist_from_footprint_items, select_single_board_document,
-        select_single_project_path, selection_item_detail, summarize_item_details,
-        summarize_selection, text_horizontal_alignment_to_proto, text_spec_to_proto,
-        PCB_OBJECT_TYPES,
+        any_to_pretty_debug, board_editor_appearance_settings_to_proto, board_stackup_to_proto,
+        commit_action_to_proto, drc_severity_to_proto, ensure_item_deletion_status_ok,
+        ensure_item_request_ok, ensure_item_status_ok, layer_to_model, map_board_stackup,
+        map_commit_session, map_hit_test_result, map_item_bounding_boxes, map_merge_mode_to_proto,
+        map_polygon_with_holes, map_run_action_status, model_document_to_proto,
+        normalize_socket_uri, pad_netlist_from_footprint_items, response_payload_as_any,
+        select_single_board_document, select_single_project_path, selection_item_detail,
+        summarize_item_details, summarize_selection, text_horizontal_alignment_to_proto,
+        text_spec_to_proto, PCB_OBJECT_TYPES,
     };
     use crate::error::KiCadError;
+    use crate::model::board::{
+        BoardLayerInfo, BoardStackup, BoardStackupLayer, BoardStackupLayerType,
+    };
     use crate::model::common::{
-        DocumentSpecifier, DocumentType, ProjectInfo, TextAttributesSpec, TextHorizontalAlignment,
-        TextSpec,
+        CommitAction, DocumentSpecifier, DocumentType, ProjectInfo, TextAttributesSpec,
+        TextHorizontalAlignment, TextSpec,
     };
     use prost::Message;
     use std::path::PathBuf;
@@ -2757,6 +3784,241 @@ mod tests {
         let project = proto.project.expect("project should be present");
         assert_eq!(project.name, "demo");
         assert_eq!(project.path, "/tmp/demo");
+    }
+
+    #[test]
+    fn map_commit_session_maps_commit_id() {
+        let response = crate::proto::kiapi::common::commands::BeginCommitResponse {
+            id: Some(crate::proto::kiapi::common::types::Kiid {
+                value: "commit-123".to_string(),
+            }),
+        };
+
+        let session = map_commit_session(response).expect("commit id should map");
+        assert_eq!(session.id, "commit-123");
+    }
+
+    #[test]
+    fn map_commit_session_requires_commit_id() {
+        let response = crate::proto::kiapi::common::commands::BeginCommitResponse { id: None };
+        let err = map_commit_session(response).expect_err("missing id must fail");
+        assert!(matches!(err, KiCadError::InvalidResponse { .. }));
+    }
+
+    #[test]
+    fn commit_action_to_proto_maps_known_variants() {
+        assert_eq!(
+            commit_action_to_proto(CommitAction::Commit),
+            crate::proto::kiapi::common::commands::CommitAction::CmaCommit as i32
+        );
+        assert_eq!(
+            commit_action_to_proto(CommitAction::Drop),
+            crate::proto::kiapi::common::commands::CommitAction::CmaDrop as i32
+        );
+    }
+
+    #[test]
+    fn map_merge_mode_to_proto_maps_known_variants() {
+        assert_eq!(
+            map_merge_mode_to_proto(crate::model::common::MapMergeMode::Merge),
+            crate::proto::kiapi::common::types::MapMergeMode::MmmMerge as i32
+        );
+        assert_eq!(
+            map_merge_mode_to_proto(crate::model::common::MapMergeMode::Replace),
+            crate::proto::kiapi::common::types::MapMergeMode::MmmReplace as i32
+        );
+    }
+
+    #[test]
+    fn drc_severity_to_proto_maps_known_variants() {
+        assert_eq!(
+            drc_severity_to_proto(crate::model::board::DrcSeverity::Warning),
+            crate::proto::kiapi::board::commands::DrcSeverity::DrsWarning as i32
+        );
+        assert_eq!(
+            drc_severity_to_proto(crate::model::board::DrcSeverity::Error),
+            crate::proto::kiapi::board::commands::DrcSeverity::DrsError as i32
+        );
+    }
+
+    #[test]
+    fn board_editor_appearance_settings_to_proto_maps_known_variants() {
+        let proto = board_editor_appearance_settings_to_proto(
+            crate::model::board::BoardEditorAppearanceSettings {
+                inactive_layer_display: crate::model::board::InactiveLayerDisplayMode::Hidden,
+                net_color_display: crate::model::board::NetColorDisplayMode::Ratsnest,
+                board_flip: crate::model::board::BoardFlipMode::FlippedX,
+                ratsnest_display: crate::model::board::RatsnestDisplayMode::VisibleLayers,
+            },
+        );
+
+        assert_eq!(
+            proto.inactive_layer_display,
+            crate::proto::kiapi::board::commands::InactiveLayerDisplayMode::IldmHidden as i32
+        );
+        assert_eq!(
+            proto.net_color_display,
+            crate::proto::kiapi::board::commands::NetColorDisplayMode::NcdmRatsnest as i32
+        );
+        assert_eq!(
+            proto.board_flip,
+            crate::proto::kiapi::board::commands::BoardFlipMode::BfmFlippedX as i32
+        );
+        assert_eq!(
+            proto.ratsnest_display,
+            crate::proto::kiapi::board::commands::RatsnestDisplayMode::RdmVisibleLayers as i32
+        );
+    }
+
+    #[test]
+    fn map_board_stackup_defaults_missing_optional_messages() {
+        let mapped = map_board_stackup(crate::proto::kiapi::board::BoardStackup::default());
+        assert_eq!(mapped.finish_type_name, "");
+        assert!(!mapped.impedance_controlled);
+        assert!(!mapped.edge_has_connector);
+        assert!(!mapped.edge_has_castellated_pads);
+        assert!(!mapped.edge_has_edge_plating);
+        assert!(mapped.layers.is_empty());
+    }
+
+    #[test]
+    fn map_board_stackup_maps_unknown_layer_type_enum() {
+        let mapped = map_board_stackup(crate::proto::kiapi::board::BoardStackup {
+            finish: None,
+            impedance: None,
+            edge: None,
+            layers: vec![crate::proto::kiapi::board::BoardStackupLayer {
+                thickness: None,
+                layer: crate::proto::kiapi::board::types::BoardLayer::BlFCu as i32,
+                enabled: true,
+                r#type: 777,
+                dielectric: None,
+                color: None,
+                material_name: String::new(),
+                user_name: String::new(),
+            }],
+        });
+        assert!(matches!(
+            mapped.layers.first().map(|layer| layer.layer_type),
+            Some(BoardStackupLayerType::Unknown(777))
+        ));
+    }
+
+    #[test]
+    fn board_stackup_to_proto_maps_unknown_layer_type_and_missing_nested_messages() {
+        let proto = board_stackup_to_proto(BoardStackup {
+            finish_type_name: String::new(),
+            impedance_controlled: false,
+            edge_has_connector: false,
+            edge_has_castellated_pads: false,
+            edge_has_edge_plating: false,
+            layers: vec![BoardStackupLayer {
+                layer: BoardLayerInfo {
+                    id: crate::proto::kiapi::board::types::BoardLayer::BlFCu as i32,
+                    name: "BL_F_Cu".to_string(),
+                },
+                user_name: "F.Cu".to_string(),
+                material_name: "Copper".to_string(),
+                enabled: true,
+                thickness_nm: None,
+                layer_type: BoardStackupLayerType::Unknown(321),
+                color: None,
+                dielectric_layers: Vec::new(),
+            }],
+        });
+
+        assert!(proto.finish.is_none());
+        assert_eq!(
+            proto
+                .impedance
+                .expect("impedance should always be present")
+                .is_controlled,
+            false
+        );
+        let edge = proto.edge.expect("edge should always be present");
+        assert!(edge.connector.is_none());
+        assert_eq!(
+            edge.castellation
+                .expect("castellation should be present")
+                .has_castellated_pads,
+            false
+        );
+        assert_eq!(
+            edge.plating
+                .expect("plating should be present")
+                .has_edge_plating,
+            false
+        );
+        let layer = proto.layers.first().expect("one layer should be present");
+        assert!(layer.thickness.is_none());
+        assert_eq!(layer.r#type, 321);
+        assert!(layer.dielectric.is_none());
+        assert!(layer.color.is_none());
+    }
+
+    #[test]
+    fn board_stackup_to_proto_preserves_edge_connector_presence() {
+        let proto = board_stackup_to_proto(BoardStackup {
+            finish_type_name: "ENIG".to_string(),
+            impedance_controlled: true,
+            edge_has_connector: true,
+            edge_has_castellated_pads: true,
+            edge_has_edge_plating: true,
+            layers: Vec::new(),
+        });
+        assert_eq!(
+            proto.finish.expect("finish should be present").type_name,
+            "ENIG"
+        );
+        let edge = proto.edge.expect("edge should be present");
+        assert!(edge.connector.is_some());
+        assert_eq!(
+            edge.castellation
+                .expect("castellation should be present")
+                .has_castellated_pads,
+            true
+        );
+        assert_eq!(
+            edge.plating
+                .expect("plating should be present")
+                .has_edge_plating,
+            true
+        );
+    }
+
+    #[test]
+    fn response_payload_as_any_validates_type_url() {
+        let response = crate::proto::kiapi::common::ApiResponse {
+            header: None,
+            status: None,
+            message: Some(prost_types::Any {
+                type_url: super::envelope::type_url("kiapi.common.commands.GetVersionResponse"),
+                value: Vec::new(),
+            }),
+        };
+
+        let err = response_payload_as_any(response, "kiapi.common.commands.BeginCommitResponse")
+            .expect_err("wrong type_url must fail");
+        assert!(matches!(err, KiCadError::UnexpectedPayloadType { .. }));
+    }
+
+    #[test]
+    fn response_payload_as_any_accepts_google_protobuf_empty_type() {
+        let response = crate::proto::kiapi::common::ApiResponse {
+            header: None,
+            status: None,
+            message: Some(prost_types::Any {
+                type_url: super::envelope::type_url("google.protobuf.Empty"),
+                value: Vec::new(),
+            }),
+        };
+
+        let payload = response_payload_as_any(response, "google.protobuf.Empty")
+            .expect("google.protobuf.Empty payload type should be accepted");
+        assert_eq!(
+            payload.type_url,
+            super::envelope::type_url("google.protobuf.Empty")
+        );
     }
 
     #[test]
@@ -2921,6 +4183,44 @@ mod tests {
     }
 
     #[test]
+    fn ensure_item_status_ok_accepts_ok_and_rejects_non_ok() {
+        assert!(
+            ensure_item_status_ok(Some(crate::proto::kiapi::common::commands::ItemStatus {
+                code: crate::proto::kiapi::common::commands::ItemStatusCode::IscOk as i32,
+                error_message: String::new(),
+            }))
+            .is_ok()
+        );
+
+        let err = ensure_item_status_ok(Some(crate::proto::kiapi::common::commands::ItemStatus {
+            code: crate::proto::kiapi::common::commands::ItemStatusCode::IscInvalidType as i32,
+            error_message: "bad item type".to_string(),
+        }))
+        .expect_err("non-OK item status should fail");
+        match err {
+            KiCadError::ItemStatus { code } => assert!(code.contains("ISC_INVALID_TYPE")),
+            _ => panic!("expected item status error"),
+        }
+    }
+
+    #[test]
+    fn ensure_item_deletion_status_ok_accepts_ok_and_rejects_non_ok() {
+        assert!(ensure_item_deletion_status_ok(
+            crate::proto::kiapi::common::commands::ItemDeletionStatus::IdsOk as i32
+        )
+        .is_ok());
+
+        let err = ensure_item_deletion_status_ok(
+            crate::proto::kiapi::common::commands::ItemDeletionStatus::IdsNonexistent as i32,
+        )
+        .expect_err("non-OK item deletion status should fail");
+        match err {
+            KiCadError::ItemStatus { code } => assert_eq!(code, "IDS_NONEXISTENT"),
+            _ => panic!("expected item status error"),
+        }
+    }
+
+    #[test]
     fn summarize_item_details_reports_unknown_payload_as_unparsed() {
         let items = vec![prost_types::Any {
             type_url: "type.googleapis.com/kiapi.board.types.UnknownThing".to_string(),
@@ -2967,6 +4267,32 @@ mod tests {
                 crate::proto::kiapi::common::commands::HitTestResult::HtrNoHit as i32
             ),
             crate::model::common::ItemHitTestResult::NoHit
+        );
+    }
+
+    #[test]
+    fn map_run_action_status_covers_known_variants() {
+        assert_eq!(
+            map_run_action_status(
+                crate::proto::kiapi::common::commands::RunActionStatus::RasOk as i32
+            ),
+            crate::model::common::RunActionStatus::Ok
+        );
+        assert_eq!(
+            map_run_action_status(
+                crate::proto::kiapi::common::commands::RunActionStatus::RasInvalid as i32
+            ),
+            crate::model::common::RunActionStatus::Invalid
+        );
+        assert_eq!(
+            map_run_action_status(
+                crate::proto::kiapi::common::commands::RunActionStatus::RasFrameNotOpen as i32
+            ),
+            crate::model::common::RunActionStatus::FrameNotOpen
+        );
+        assert_eq!(
+            map_run_action_status(1234),
+            crate::model::common::RunActionStatus::Unknown(1234)
         );
     }
 

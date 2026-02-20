@@ -164,6 +164,7 @@ pub struct BoardStackupLayer {
 pub struct BoardStackup {
     pub finish_type_name: String,
     pub impedance_controlled: bool,
+    pub edge_has_connector: bool,
     pub edge_has_castellated_pads: bool,
     pub edge_has_edge_plating: bool,
     pub layers: Vec<BoardStackupLayer>,
@@ -222,6 +223,54 @@ pub enum RatsnestDisplayMode {
     AllLayers,
     VisibleLayers,
     Unknown(i32),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DrcSeverity {
+    Warning,
+    Error,
+    Exclusion,
+    Ignore,
+    Info,
+    Action,
+    Debug,
+    Undefined,
+}
+
+impl std::fmt::Display for DrcSeverity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            Self::Warning => "warning",
+            Self::Error => "error",
+            Self::Exclusion => "exclusion",
+            Self::Ignore => "ignore",
+            Self::Info => "info",
+            Self::Action => "action",
+            Self::Debug => "debug",
+            Self::Undefined => "undefined",
+        };
+        write!(f, "{value}")
+    }
+}
+
+impl FromStr for DrcSeverity {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "warning" => Ok(Self::Warning),
+            "error" => Ok(Self::Error),
+            "exclusion" => Ok(Self::Exclusion),
+            "ignore" => Ok(Self::Ignore),
+            "info" => Ok(Self::Info),
+            "action" => Ok(Self::Action),
+            "debug" => Ok(Self::Debug),
+            "undefined" => Ok(Self::Undefined),
+            _ => Err(format!(
+                "unknown drc severity `{value}`; expected warning, error, exclusion, ignore, info, action, debug, or undefined"
+            )),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -424,7 +473,7 @@ pub enum PcbItem {
 mod tests {
     use std::str::FromStr;
 
-    use super::BoardOriginKind;
+    use super::{BoardOriginKind, DrcSeverity};
 
     #[test]
     fn board_origin_kind_parses_known_values() {
@@ -441,6 +490,24 @@ mod tests {
     #[test]
     fn board_origin_kind_rejects_unknown_values() {
         let result = BoardOriginKind::from_str("other");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn drc_severity_parses_known_values() {
+        assert_eq!(
+            DrcSeverity::from_str("warning").expect("warning should parse"),
+            DrcSeverity::Warning
+        );
+        assert_eq!(
+            DrcSeverity::from_str("error").expect("error should parse"),
+            DrcSeverity::Error
+        );
+    }
+
+    #[test]
+    fn drc_severity_rejects_unknown_values() {
+        let result = DrcSeverity::from_str("fatal");
         assert!(result.is_err());
     }
 }

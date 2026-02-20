@@ -29,6 +29,18 @@ Version:
 cargo run --bin kicad-ipc-cli -- version
 ```
 
+Resolve KiCad binary path (default `kicad-cli`):
+
+```bash
+cargo run --bin kicad-ipc-cli -- kicad-binary-path --binary-name kicad-cli
+```
+
+Resolve plugin settings path (default identifier `kicad-ipc-rust`):
+
+```bash
+cargo run --bin kicad-ipc-cli -- plugin-settings-path --identifier kicad-ipc-rust
+```
+
 List open PCB docs:
 
 ```bash
@@ -53,10 +65,22 @@ List project net classes:
 cargo run --bin kicad-ipc-cli -- net-classes
 ```
 
+Write current net classes back with selected merge mode:
+
+```bash
+cargo run --bin kicad-ipc-cli -- set-net-classes --merge-mode merge
+```
+
 List text variables for current board document:
 
 ```bash
 cargo run --bin kicad-ipc-cli -- text-variables
+```
+
+Set text variables:
+
+```bash
+cargo run --bin kicad-ipc-cli -- set-text-variables --merge-mode merge --var REV=A
 ```
 
 Expand text variables in one or more input strings:
@@ -83,16 +107,34 @@ List enabled board layers:
 cargo run --bin kicad-ipc-cli -- enabled-layers
 ```
 
+Set enabled board layers:
+
+```bash
+cargo run --bin kicad-ipc-cli -- set-enabled-layers --copper-layer-count 2 --layer-id 47 --layer-id 52
+```
+
 Show active layer:
 
 ```bash
 cargo run --bin kicad-ipc-cli -- active-layer
 ```
 
+Set active layer:
+
+```bash
+cargo run --bin kicad-ipc-cli -- set-active-layer --layer-id 0
+```
+
 Show visible layers:
 
 ```bash
 cargo run --bin kicad-ipc-cli -- visible-layers
+```
+
+Set visible layers:
+
+```bash
+cargo run --bin kicad-ipc-cli -- set-visible-layers --layer-id 0 --layer-id 31
 ```
 
 Show board origin (grid origin by default):
@@ -105,6 +147,80 @@ Show drill origin:
 
 ```bash
 cargo run --bin kicad-ipc-cli -- board-origin --type drill
+```
+
+Set board origin:
+
+```bash
+cargo run --bin kicad-ipc-cli -- set-board-origin --type grid --x-nm 1000000 --y-nm 2000000
+```
+
+Refresh PCB editor:
+
+```bash
+cargo run --bin kicad-ipc-cli -- refresh-editor --frame pcb
+```
+
+If your KiCad build does not expose this handler yet, this call may return `AS_UNHANDLED`.
+
+Start a staged commit and print commit ID:
+
+```bash
+cargo run --bin kicad-ipc-cli -- --client-name write-test begin-commit
+```
+
+End a staged commit:
+
+```bash
+cargo run --bin kicad-ipc-cli -- --client-name write-test end-commit --id <commit-id> --action drop --message "cli test cleanup"
+```
+
+Save current board document:
+
+```bash
+cargo run --bin kicad-ipc-cli -- save-doc
+```
+
+Save a copy of current board document:
+
+```bash
+cargo run --bin kicad-ipc-cli -- save-copy --path /tmp/example.kicad_pcb --overwrite --include-project
+```
+
+Revert current board document from disk:
+
+```bash
+cargo run --bin kicad-ipc-cli -- revert-doc
+```
+
+Run a raw KiCad tool action:
+
+```bash
+cargo run --bin kicad-ipc-cli -- run-action --action pcbnew.InteractiveSelection.ClearSelection
+```
+
+Create raw Any item payload(s):
+
+```bash
+cargo run --bin kicad-ipc-cli -- create-items --item type.googleapis.com/kiapi.board.types.Text=<hex_payload>
+```
+
+Update raw Any item payload(s):
+
+```bash
+cargo run --bin kicad-ipc-cli -- update-items --item type.googleapis.com/kiapi.board.types.Text=<hex_payload>
+```
+
+Delete items by ID:
+
+```bash
+cargo run --bin kicad-ipc-cli -- delete-items --id <uuid> --id <uuid>
+```
+
+Parse and create items from s-expression:
+
+```bash
+cargo run --bin kicad-ipc-cli -- parse-create-items --contents "(kicad_pcb (version 20240108))"
 ```
 
 Show summary of current PCB selection by item type:
@@ -123,6 +239,24 @@ Show raw protobuf payload bytes for selected items:
 
 ```bash
 cargo run --bin kicad-ipc-cli -- selection-raw
+```
+
+Add items to current selection:
+
+```bash
+cargo run --bin kicad-ipc-cli -- add-to-selection --id <uuid> --id <uuid>
+```
+
+Remove items from current selection:
+
+```bash
+cargo run --bin kicad-ipc-cli -- remove-from-selection --id <uuid> --id <uuid>
+```
+
+Clear current selection:
+
+```bash
+cargo run --bin kicad-ipc-cli -- clear-selection
 ```
 
 Show pad-level netlist entries (footprint/pad/net):
@@ -207,8 +341,33 @@ Show typed stackup/graphics/appearance:
 
 ```bash
 cargo run --bin kicad-ipc-cli -- stackup
+cargo run --bin kicad-ipc-cli -- update-stackup
 cargo run --bin kicad-ipc-cli -- graphics-defaults
 cargo run --bin kicad-ipc-cli -- appearance
+```
+
+Set editor appearance:
+
+```bash
+cargo run --bin kicad-ipc-cli -- set-appearance --inactive-layer-display hidden --net-color-display all --board-flip normal --ratsnest-display all-layers
+```
+
+Inject DRC marker:
+
+```bash
+cargo run --bin kicad-ipc-cli -- inject-drc-error --severity error --message "API marker test" --x-nm 1000000 --y-nm 1000000
+```
+
+Refill all zones:
+
+```bash
+cargo run --bin kicad-ipc-cli -- refill-zones
+```
+
+Start interactive move tool for one or more item IDs:
+
+```bash
+cargo run --bin kicad-ipc-cli -- interactive-move --id <uuid> --id <uuid>
 ```
 
 Show typed netclass map:
@@ -257,6 +416,12 @@ Custom token:
 
 ```bash
 cargo run --bin kicad-ipc-cli -- --token "$KICAD_API_TOKEN" version
+```
+
+Stable client name (needed when pairing `begin-commit` and `end-commit` across separate CLI runs):
+
+```bash
+cargo run --bin kicad-ipc-cli -- --client-name write-test begin-commit
 ```
 
 Custom timeout:
