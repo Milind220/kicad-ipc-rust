@@ -78,6 +78,7 @@ const CMD_BEGIN_COMMIT: &str = "kiapi.common.commands.BeginCommit";
 const CMD_END_COMMIT: &str = "kiapi.common.commands.EndCommit";
 const CMD_CREATE_ITEMS: &str = "kiapi.common.commands.CreateItems";
 const CMD_UPDATE_ITEMS: &str = "kiapi.common.commands.UpdateItems";
+const CMD_DELETE_ITEMS: &str = "kiapi.common.commands.DeleteItems";
 const CMD_GET_ITEMS: &str = "kiapi.common.commands.GetItems";
 const CMD_GET_ITEMS_BY_ID: &str = "kiapi.common.commands.GetItemsById";
 const CMD_GET_BOUNDING_BOX: &str = "kiapi.common.commands.GetBoundingBox";
@@ -118,6 +119,7 @@ const RES_BEGIN_COMMIT_RESPONSE: &str = "kiapi.common.commands.BeginCommitRespon
 const RES_END_COMMIT_RESPONSE: &str = "kiapi.common.commands.EndCommitResponse";
 const RES_CREATE_ITEMS_RESPONSE: &str = "kiapi.common.commands.CreateItemsResponse";
 const RES_UPDATE_ITEMS_RESPONSE: &str = "kiapi.common.commands.UpdateItemsResponse";
+const RES_DELETE_ITEMS_RESPONSE: &str = "kiapi.common.commands.DeleteItemsResponse";
 const RES_GET_ITEMS_RESPONSE: &str = "kiapi.common.commands.GetItemsResponse";
 const RES_GET_BOUNDING_BOX_RESPONSE: &str = "kiapi.common.commands.GetBoundingBoxResponse";
 const RES_HIT_TEST_RESPONSE: &str = "kiapi.common.commands.HitTestResponse";
@@ -691,6 +693,44 @@ impl KiCadClient {
                 row.item.ok_or_else(|| KiCadError::InvalidResponse {
                     reason: "UpdateItemsResponse missing updated item payload".to_string(),
                 })
+            })
+            .collect()
+    }
+
+    pub async fn delete_items_raw(
+        &self,
+        item_ids: Vec<String>,
+    ) -> Result<prost_types::Any, KiCadError> {
+        let command = common_commands::DeleteItems {
+            header: Some(self.current_board_item_header().await?),
+            item_ids: item_ids
+                .into_iter()
+                .map(|value| common_types::Kiid { value })
+                .collect(),
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_DELETE_ITEMS))
+            .await?;
+        response_payload_as_any(response, RES_DELETE_ITEMS_RESPONSE)
+    }
+
+    pub async fn delete_items(&self, item_ids: Vec<String>) -> Result<Vec<String>, KiCadError> {
+        let payload = self.delete_items_raw(item_ids).await?;
+        let response: common_commands::DeleteItemsResponse =
+            decode_any(&payload, RES_DELETE_ITEMS_RESPONSE)?;
+        ensure_item_request_ok(response.status)?;
+
+        response
+            .deleted_items
+            .into_iter()
+            .map(|row| {
+                ensure_item_deletion_status_ok(row.status)?;
+                row.id
+                    .map(|id| id.value)
+                    .ok_or_else(|| KiCadError::InvalidResponse {
+                        reason: "DeleteItemsResponse missing deleted item id".to_string(),
+                    })
             })
             .collect()
     }
@@ -2160,6 +2200,19 @@ fn ensure_item_status_ok(status: Option<common_commands::ItemStatus>) -> Result<
     Ok(())
 }
 
+fn ensure_item_deletion_status_ok(status: i32) -> Result<(), KiCadError> {
+    let code = common_commands::ItemDeletionStatus::try_from(status)
+        .unwrap_or(common_commands::ItemDeletionStatus::IdsUnknown);
+
+    if code != common_commands::ItemDeletionStatus::IdsOk {
+        return Err(KiCadError::ItemStatus {
+            code: code.as_str_name().to_string(),
+        });
+    }
+
+    Ok(())
+}
+
 fn map_item_bounding_boxes(
     item_ids: Vec<common_types::Kiid>,
     boxes: Vec<common_types::Box2>,
@@ -3281,13 +3334,13 @@ fn default_client_name() -> String {
 mod tests {
     use super::{
         any_to_pretty_debug, board_editor_appearance_settings_to_proto, commit_action_to_proto,
-        drc_severity_to_proto, ensure_item_request_ok, ensure_item_status_ok, layer_to_model,
-        map_commit_session, map_hit_test_result, map_item_bounding_boxes, map_polygon_with_holes,
-        map_run_action_status, model_document_to_proto, normalize_socket_uri,
-        pad_netlist_from_footprint_items, response_payload_as_any, select_single_board_document,
-        select_single_project_path, selection_item_detail, summarize_item_details,
-        summarize_selection, text_horizontal_alignment_to_proto, text_spec_to_proto,
-        PCB_OBJECT_TYPES,
+        drc_severity_to_proto, ensure_item_deletion_status_ok, ensure_item_request_ok,
+        ensure_item_status_ok, layer_to_model, map_commit_session, map_hit_test_result,
+        map_item_bounding_boxes, map_polygon_with_holes, map_run_action_status,
+        model_document_to_proto, normalize_socket_uri, pad_netlist_from_footprint_items,
+        response_payload_as_any, select_single_board_document, select_single_project_path,
+        selection_item_detail, summarize_item_details, summarize_selection,
+        text_horizontal_alignment_to_proto, text_spec_to_proto, PCB_OBJECT_TYPES,
     };
     use crate::error::KiCadError;
     use crate::model::common::{
@@ -3709,6 +3762,23 @@ mod tests {
         .expect_err("non-OK item status should fail");
         match err {
             KiCadError::ItemStatus { code } => assert!(code.contains("ISC_INVALID_TYPE")),
+            _ => panic!("expected item status error"),
+        }
+    }
+
+    #[test]
+    fn ensure_item_deletion_status_ok_accepts_ok_and_rejects_non_ok() {
+        assert!(ensure_item_deletion_status_ok(
+            crate::proto::kiapi::common::commands::ItemDeletionStatus::IdsOk as i32
+        )
+        .is_ok());
+
+        let err = ensure_item_deletion_status_ok(
+            crate::proto::kiapi::common::commands::ItemDeletionStatus::IdsNonexistent as i32,
+        )
+        .expect_err("non-OK item deletion status should fail");
+        match err {
+            KiCadError::ItemStatus { code } => assert_eq!(code, "IDS_NONEXISTENT"),
             _ => panic!("expected item status error"),
         }
     }

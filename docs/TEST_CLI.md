@@ -199,6 +199,12 @@ Update raw Any item payload(s):
 cargo run --bin kicad-ipc-cli -- update-items --item type.googleapis.com/kiapi.board.types.Text=<hex_payload>
 ```
 
+Delete items by ID:
+
+```bash
+cargo run --bin kicad-ipc-cli -- delete-items --id <uuid> --id <uuid>
+```
+
 Show summary of current PCB selection by item type:
 
 ```bash

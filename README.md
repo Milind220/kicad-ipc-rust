@@ -41,6 +41,7 @@ Deferred manual/runtime verification (implemented after 2026-02-20 while user un
 - `RunAction`
 - `CreateItems`
 - `UpdateItems`
+- `DeleteItems`
 
 ## KiCad v10 RC1.1 API Completion Matrix
 
@@ -61,11 +62,11 @@ Legend:
 | Section | Proto Commands | Implemented | Coverage |
 | --- | ---: | ---: | ---: |
 | Common (base) | 6 | 6 | 100% |
-| Common editor/document | 23 | 21 | 91% |
+| Common editor/document | 23 | 22 | 96% |
 | Project manager | 5 | 3 | 60% |
 | Board editor (PCB) | 22 | 20 | 91% |
 | Schematic editor (dedicated proto commands) | 0 | 0 | n/a |
-| **Total** | **56** | **50** | **89%** |
+| **Total** | **56** | **51** | **91%** |
 
 ### Common (base)
 
@@ -94,7 +95,7 @@ Legend:
 | `GetItems` | Implemented | `KiCadClient::get_items_raw_by_type_codes`, `KiCadClient::get_items_by_type_codes`, `KiCadClient::get_items_details_by_type_codes`, `KiCadClient::get_all_pcb_items_raw`, `KiCadClient::get_all_pcb_items`, `KiCadClient::get_all_pcb_items_details`, `KiCadClient::get_pad_netlist` |
 | `GetItemsById` | Implemented | `KiCadClient::get_items_by_id_raw`, `KiCadClient::get_items_by_id`, `KiCadClient::get_items_by_id_details` |
 | `UpdateItems` | Implemented | `KiCadClient::update_items_raw`, `KiCadClient::update_items` |
-| `DeleteItems` | Not yet | - |
+| `DeleteItems` | Implemented | `KiCadClient::delete_items_raw`, `KiCadClient::delete_items` |
 | `GetBoundingBox` | Implemented | `KiCadClient::get_item_bounding_boxes` |
 | `GetSelection` | Implemented | `KiCadClient::get_selection_raw`, `KiCadClient::get_selection`, `KiCadClient::get_selection_summary`, `KiCadClient::get_selection_details` |
 | `AddToSelection` | Implemented | `KiCadClient::add_to_selection_raw`, `KiCadClient::add_to_selection` |
