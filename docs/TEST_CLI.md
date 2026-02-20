@@ -169,6 +169,12 @@ Show raw protobuf payload bytes for selected items:
 cargo run --bin kicad-ipc-cli -- selection-raw
 ```
 
+Add items to current selection:
+
+```bash
+cargo run --bin kicad-ipc-cli -- add-to-selection --id <uuid> --id <uuid>
+```
+
 Clear current selection:
 
 ```bash

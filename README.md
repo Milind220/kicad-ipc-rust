@@ -50,11 +50,11 @@ Legend:
 | Section | Proto Commands | Implemented | Coverage |
 | --- | ---: | ---: | ---: |
 | Common (base) | 6 | 4 | 67% |
-| Common editor/document | 23 | 13 | 57% |
+| Common editor/document | 23 | 14 | 61% |
 | Project manager | 5 | 3 | 60% |
 | Board editor (PCB) | 22 | 20 | 91% |
 | Schematic editor (dedicated proto commands) | 0 | 0 | n/a |
-| **Total** | **56** | **40** | **71%** |
+| **Total** | **56** | **41** | **73%** |
 
 ### Common (base)
 
@@ -86,7 +86,7 @@ Legend:
 | `DeleteItems` | Not yet | - |
 | `GetBoundingBox` | Implemented | `KiCadClient::get_item_bounding_boxes` |
 | `GetSelection` | Implemented | `KiCadClient::get_selection_raw`, `KiCadClient::get_selection`, `KiCadClient::get_selection_summary`, `KiCadClient::get_selection_details` |
-| `AddToSelection` | Not yet | - |
+| `AddToSelection` | Implemented | `KiCadClient::add_to_selection_raw`, `KiCadClient::add_to_selection` |
 | `RemoveFromSelection` | Not yet | - |
 | `ClearSelection` | Implemented | `KiCadClient::clear_selection_raw`, `KiCadClient::clear_selection` |
 | `HitTest` | Implemented | `KiCadClient::hit_test_item` |
