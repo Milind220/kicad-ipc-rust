@@ -1,11 +1,22 @@
 [package]
-name = "kicad-ipc"
-version = "0.0.0"
+name = "kicad-ipc-rs"
+version = "0.1.0"
 edition = "2021"
 license = "MIT"
-description = "Rust bindings for the KiCad IPC API"
-repository = "https://github.com/kicad-oss/kicad-ipc-rust"
+description = "Rust client library for the KiCad IPC API (async-first)"
+repository = "https://github.com/Milind220/kicad-api-rust"
+homepage = "https://github.com/Milind220/kicad-api-rust"
 readme = "README.md"
+keywords = ["kicad", "eda", "pcb", "ipc"]
+categories = ["api-bindings", "asynchronous"]
+include = [
+    "/src/**",
+    "/proto/**",
+    "/build.rs",
+    "/README.md",
+    "/LICENSE",
+    "/Cargo.toml",
+]
 
 [features]
 default = ["async"]
@@ -23,8 +34,3 @@ tracing = { version = "0.1.41", optional = true }
 
 [build-dependencies]
 prost-build = "0.14.1"
-
-[[bin]]
-name = "kicad-ipc-cli"
-path = "test-scripts/kicad-ipc-cli.rs"
-required-features = ["async"]

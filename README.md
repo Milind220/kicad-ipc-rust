@@ -1,28 +1,24 @@
-# KiCad IPC API Rust
+# kicad-ipc-rs
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Milind220/kicad-ipc-rust)
 
-MIT-licensed Rust bindings for the KiCad IPC API.
+MIT-licensed Rust client library for the KiCad IPC API.
 
-## Current Status
+## Status
 
-Early scaffold phase. Core architecture + step-by-step implementation plan:
-- `/Users/milindsharma/Developer/kicad-oss/kicad-ipc-rust/prompts/IPC_RUST_EXECUTION_PLAN.md`
-- `/Users/milindsharma/Developer/kicad-oss/kicad-ipc-rust/proto/README.md`
+Alpha. `v0.1.0` release candidate.
 
-## Roadmap
-
-1. Async-first layered client (`v0.1.0`)
-2. Full PCB read surface + trace write capability (`v0.1.0`)
-3. Blocking wrapper parity (`v0.2.0`)
+- Async API: implemented and usable.
+- Sync/blocking wrapper API: planned, not shipped yet.
+- Real-world user testing: still limited.
+- Issues and PRs welcome.
 
 ## Local Testing
 
 - CLI runbook: `/Users/milindsharma/Developer/kicad-oss/kicad-ipc-rust/docs/TEST_CLI.md`
 
-## Runtime Compatibility Notes (Current Test Rig)
+## Runtime Compatibility Notes
 
-- Last verified: 2026-02-20
 - KiCad version (`kicad-ipc-cli version`): `10.0.0 (10.0.0-rc1)`
 
 Commands wrapped in this crate but currently unhandled/unsupported by this KiCad build:
@@ -31,31 +27,12 @@ Commands wrapped in this crate but currently unhandled/unsupported by this KiCad
 | --- | --- | --- |
 | `RefreshEditor` | `AS_UNHANDLED` | KiCad responds `no handler available for request of type kiapi.common.commands.RefreshEditor`. |
 
-Deferred manual/runtime verification (implemented after 2026-02-20 while user unavailable):
-
-- `GetKiCadBinaryPath`
-- `GetPluginSettingsPath`
-- `SaveDocument`
-- `SaveCopyOfDocument`
-- `RevertDocument`
-- `RunAction`
+Runtime-verified operations include:
 - `CreateItems`
 - `UpdateItems`
 - `DeleteItems`
-- `ParseAndCreateItemsFromString`
-- `SetNetClasses`
-- `SetTextVariables`
-- `UpdateBoardStackup`
-- `InteractiveMoveItems`
 
 ## KiCad v10 RC1.1 API Completion Matrix
-
-Source of truth for this matrix:
-- `/Users/milindsharma/Developer/kicad-oss/kicad-ipc-rust/proto/common/commands/base_commands.proto`
-- `/Users/milindsharma/Developer/kicad-oss/kicad-ipc-rust/proto/common/commands/editor_commands.proto`
-- `/Users/milindsharma/Developer/kicad-oss/kicad-ipc-rust/proto/common/commands/project_commands.proto`
-- `/Users/milindsharma/Developer/kicad-oss/kicad-ipc-rust/proto/board/board_commands.proto`
-- `/Users/milindsharma/Developer/kicad-oss/kicad-ipc-rust/proto/schematic/schematic_commands.proto`
 
 Legend:
 - `Implemented` = wrapped in current Rust client (`src/client.rs`).
@@ -169,3 +146,11 @@ Legend:
 | --- | --- |
 | Dedicated footprint-editor command proto | None in current snapshot |
 | Current path | Uses common editor/document commands via `DocumentType::DOCTYPE_FOOTPRINT` |
+
+## Roadmap
+
+`v0.2.0` target:
+- Add full sync/blocking wrapper API parity over async client.
+- Expand runtime + integration testing coverage.
+- Set up CI to run checks/tests on commits and PRs.
+- Continue API hardening/docs/examples for stable `1.0` path.
