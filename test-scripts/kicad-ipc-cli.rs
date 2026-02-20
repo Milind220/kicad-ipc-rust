@@ -100,6 +100,10 @@ enum Command {
     RunAction {
         action: String,
     },
+    CreateItems {
+        items: Vec<prost_types::Any>,
+        container_id: Option<String>,
+    },
     AddToSelection {
         item_ids: Vec<String>,
     },
@@ -473,6 +477,20 @@ async fn run() -> Result<(), KiCadError> {
         Command::RunAction { action } => {
             let status = client.run_action(action).await?;
             println!("run_action_status={status:?}");
+        }
+        Command::CreateItems {
+            items,
+            container_id,
+        } => {
+            let created = client.create_items(items, container_id).await?;
+            println!("created_item_count={}", created.len());
+            for (index, item) in created.iter().enumerate() {
+                println!(
+                    "[{index}] type_url={} raw_len={}",
+                    item.type_url,
+                    item.value.len()
+                );
+            }
         }
         Command::AddToSelection { item_ids } => {
             let summary = client.add_to_selection(item_ids).await?;
@@ -1334,6 +1352,51 @@ fn parse_args_from(mut args: Vec<String>) -> Result<(CliConfig, Command), KiCadE
                 })?,
             }
         }
+        "create-items" => {
+            let mut items = Vec::new();
+            let mut container_id = None;
+            let mut i = 1;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--item" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for create-items --item".to_string(),
+                        })?;
+                        let (type_url, hex) =
+                            value.split_once('=').ok_or_else(|| KiCadError::Config {
+                                reason: "create-items --item requires `<type_url>=<hex>`"
+                                    .to_string(),
+                            })?;
+                        items.push(prost_types::Any {
+                            type_url: type_url.to_string(),
+                            value: hex_to_bytes(hex)
+                                .map_err(|reason| KiCadError::Config { reason })?,
+                        });
+                        i += 2;
+                    }
+                    "--container-id" => {
+                        let value = args.get(i + 1).ok_or_else(|| KiCadError::Config {
+                            reason: "missing value for create-items --container-id".to_string(),
+                        })?;
+                        container_id = Some(value.clone());
+                        i += 2;
+                    }
+                    _ => i += 1,
+                }
+            }
+
+            if items.is_empty() {
+                return Err(KiCadError::Config {
+                    reason: "create-items requires one or more `--item <type_url>=<hex>` values"
+                        .to_string(),
+                });
+            }
+
+            Command::CreateItems {
+                items,
+                container_id,
+            }
+        }
         "add-to-selection" => {
             let item_ids = parse_item_ids(&args[1..], "add-to-selection")?;
             Command::AddToSelection { item_ids }
@@ -1808,7 +1871,7 @@ fn default_config() -> CliConfig {
 
 fn print_help() {
     println!(
-        "kicad-ipc-cli\n\nUSAGE:\n  cargo run --bin kicad-ipc-cli -- [--socket URI] [--token TOKEN] [--client-name NAME] [--timeout-ms N] <command> [command options]\n\nCOMMANDS:\n  ping                         Check IPC connectivity\n  version                      Fetch KiCad version\n  kicad-binary-path [--binary-name <name>]\n                               Resolve absolute path for a KiCad binary (default: kicad-cli)\n  plugin-settings-path [--identifier <id>]\n                               Resolve writeable plugin settings directory (default: kicad-ipc-rust)\n  open-docs [--type <type>]    List open docs (default type: pcb)\n  project-path                 Get current project path from open PCB docs\n  board-open                   Exit non-zero if no PCB doc is open\n  net-classes                  List project netclass definitions\n  text-variables               List text variables for current board document\n  expand-text-variables        Expand variables in provided text values\n                               Options: --text <value> (repeatable)\n  text-extents                 Measure text bounding box\n                               Options: --text <value>\n  text-as-shapes               Convert text to rendered shapes\n                               Options: --text <value> (repeatable)\n  nets                         List board nets (requires one open PCB)\n  netlist-pads                 Emit pad-level netlist data (with footprint context)\n  items-by-id --id <uuid> ...  Show parsed details for specific item IDs\n  item-bbox --id <uuid> ...    Show bounding boxes for item IDs\n  hit-test --id <uuid> --x-nm <x> --y-nm <y> [--tolerance-nm <n>]\n                               Hit-test one item at a point\n  types-pcb                    List PCB KiCad object type IDs from proto enum\n  items-raw --type-id <id> ... Dump raw Any payloads for requested item type IDs\n  items-raw-all-pcb [--debug]  Dump all PCB item payloads across all PCB object types\n  pad-shape-polygon --pad-id <uuid> ... --layer-id <i32> [--debug]\n                               Dump pad polygons on a target layer\n  padstack-presence --item-id <uuid> ... --layer-id <i32> ... [--debug]\n                               Check padstack shape presence matrix across layers\n  title-block                  Show title block fields\n  board-as-string              Dump board as KiCad s-expression text\n  selection-as-string          Dump current selection as KiCad s-expression text\n  stackup                      Show typed board stackup\n  graphics-defaults            Show typed graphics defaults\n  appearance                   Show typed editor appearance settings\n  set-appearance --inactive-layer-display <normal|dimmed|hidden>\n                 --net-color-display <all|ratsnest|off>\n                 --board-flip <normal|flipped-x>\n                 --ratsnest-display <all-layers|visible-layers>\n                               Set editor appearance settings\n  inject-drc-error --severity <s> --message <text> [--x-nm <i64> --y-nm <i64>] [--item-id <uuid> ...]\n                               Inject a DRC marker (severity: warning|error|exclusion|ignore|info|action|debug|undefined)\n  refill-zones [--zone-id <uuid> ...]\n                               Refill all zones or a provided subset\n  netclass                     Show typed netclass map for current board nets\n  proto-coverage-board-read    Print board-read command coverage vs proto\n  board-read-report [--out P]  Write markdown board reconstruction report\n  enabled-layers               List enabled board layers\n  set-enabled-layers --copper-layer-count <u32> [--layer-id <i32> ...]\n                               Set enabled board layer set\n  active-layer                 Show active board layer\n  set-active-layer --layer-id <i32>\n                               Set active board layer\n  visible-layers               Show currently visible board layers\n  set-visible-layers --layer-id <i32> ...\n                               Set visible board layers\n  board-origin [--type <t>]    Show board origin (`grid` default, or `drill`)\n  set-board-origin --type <t> --x-nm <i64> --y-nm <i64>\n                               Set board origin (`grid` or `drill`)\n  refresh-editor [--frame <f>] Refresh a specific editor frame (default: pcb)\n  begin-commit                 Start staged commit and print commit ID\n  end-commit --id <uuid> [--action <commit|drop>] [--message <text>]\n                               End staged commit with commit/drop action\n  save-doc                     Save current board document\n  save-copy --path <path> [--overwrite] [--include-project]\n                               Save current board document to a new location\n  revert-doc                   Revert current board document from disk\n  run-action --action <name>   Run a raw KiCad tool action\n  add-to-selection --id <uuid> ...\n                               Add items to current selection\n  remove-from-selection --id <uuid> ...\n                               Remove items from current selection\n  clear-selection              Clear current item selection\n  selection-summary            Show current selection item type counts\n  selection-details            Show parsed details for selected items\n  selection-raw                Show raw Any payload bytes for selected items\n  smoke                        ping + version + board-open summary\n  help                         Show help\n\nTYPES:\n  schematic | symbol | pcb | footprint | drawing-sheet | project\n"
+        "kicad-ipc-cli\n\nUSAGE:\n  cargo run --bin kicad-ipc-cli -- [--socket URI] [--token TOKEN] [--client-name NAME] [--timeout-ms N] <command> [command options]\n\nCOMMANDS:\n  ping                         Check IPC connectivity\n  version                      Fetch KiCad version\n  kicad-binary-path [--binary-name <name>]\n                               Resolve absolute path for a KiCad binary (default: kicad-cli)\n  plugin-settings-path [--identifier <id>]\n                               Resolve writeable plugin settings directory (default: kicad-ipc-rust)\n  open-docs [--type <type>]    List open docs (default type: pcb)\n  project-path                 Get current project path from open PCB docs\n  board-open                   Exit non-zero if no PCB doc is open\n  net-classes                  List project netclass definitions\n  text-variables               List text variables for current board document\n  expand-text-variables        Expand variables in provided text values\n                               Options: --text <value> (repeatable)\n  text-extents                 Measure text bounding box\n                               Options: --text <value>\n  text-as-shapes               Convert text to rendered shapes\n                               Options: --text <value> (repeatable)\n  nets                         List board nets (requires one open PCB)\n  netlist-pads                 Emit pad-level netlist data (with footprint context)\n  items-by-id --id <uuid> ...  Show parsed details for specific item IDs\n  item-bbox --id <uuid> ...    Show bounding boxes for item IDs\n  hit-test --id <uuid> --x-nm <x> --y-nm <y> [--tolerance-nm <n>]\n                               Hit-test one item at a point\n  types-pcb                    List PCB KiCad object type IDs from proto enum\n  items-raw --type-id <id> ... Dump raw Any payloads for requested item type IDs\n  items-raw-all-pcb [--debug]  Dump all PCB item payloads across all PCB object types\n  pad-shape-polygon --pad-id <uuid> ... --layer-id <i32> [--debug]\n                               Dump pad polygons on a target layer\n  padstack-presence --item-id <uuid> ... --layer-id <i32> ... [--debug]\n                               Check padstack shape presence matrix across layers\n  title-block                  Show title block fields\n  board-as-string              Dump board as KiCad s-expression text\n  selection-as-string          Dump current selection as KiCad s-expression text\n  stackup                      Show typed board stackup\n  graphics-defaults            Show typed graphics defaults\n  appearance                   Show typed editor appearance settings\n  set-appearance --inactive-layer-display <normal|dimmed|hidden>\n                 --net-color-display <all|ratsnest|off>\n                 --board-flip <normal|flipped-x>\n                 --ratsnest-display <all-layers|visible-layers>\n                               Set editor appearance settings\n  inject-drc-error --severity <s> --message <text> [--x-nm <i64> --y-nm <i64>] [--item-id <uuid> ...]\n                               Inject a DRC marker (severity: warning|error|exclusion|ignore|info|action|debug|undefined)\n  refill-zones [--zone-id <uuid> ...]\n                               Refill all zones or a provided subset\n  netclass                     Show typed netclass map for current board nets\n  proto-coverage-board-read    Print board-read command coverage vs proto\n  board-read-report [--out P]  Write markdown board reconstruction report\n  enabled-layers               List enabled board layers\n  set-enabled-layers --copper-layer-count <u32> [--layer-id <i32> ...]\n                               Set enabled board layer set\n  active-layer                 Show active board layer\n  set-active-layer --layer-id <i32>\n                               Set active board layer\n  visible-layers               Show currently visible board layers\n  set-visible-layers --layer-id <i32> ...\n                               Set visible board layers\n  board-origin [--type <t>]    Show board origin (`grid` default, or `drill`)\n  set-board-origin --type <t> --x-nm <i64> --y-nm <i64>\n                               Set board origin (`grid` or `drill`)\n  refresh-editor [--frame <f>] Refresh a specific editor frame (default: pcb)\n  begin-commit                 Start staged commit and print commit ID\n  end-commit --id <uuid> [--action <commit|drop>] [--message <text>]\n                               End staged commit with commit/drop action\n  save-doc                     Save current board document\n  save-copy --path <path> [--overwrite] [--include-project]\n                               Save current board document to a new location\n  revert-doc                   Revert current board document from disk\n  run-action --action <name>   Run a raw KiCad tool action\n  create-items --item <type_url>=<hex> ... [--container-id <uuid>]\n                               Create raw Any payload items in current board document\n  add-to-selection --id <uuid> ...\n                               Add items to current selection\n  remove-from-selection --id <uuid> ...\n                               Remove items from current selection\n  clear-selection              Clear current item selection\n  selection-summary            Show current selection item type counts\n  selection-details            Show parsed details for selected items\n  selection-raw                Show raw Any payload bytes for selected items\n  smoke                        ping + version + board-open summary\n  help                         Show help\n\nTYPES:\n  schematic | symbol | pcb | footprint | drawing-sheet | project\n"
     );
 }
 
@@ -2358,6 +2421,33 @@ fn hex_char(value: u8) -> char {
     }
 }
 
+fn hex_to_bytes(hex: &str) -> Result<Vec<u8>, String> {
+    if !hex.len().is_multiple_of(2) {
+        return Err("hex payload must have an even number of characters".to_string());
+    }
+
+    let mut bytes = Vec::with_capacity(hex.len() / 2);
+    let chars: Vec<char> = hex.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let high = hex_nibble(chars[i])?;
+        let low = hex_nibble(chars[i + 1])?;
+        bytes.push((high << 4) | low);
+        i += 2;
+    }
+
+    Ok(bytes)
+}
+
+fn hex_nibble(c: char) -> Result<u8, String> {
+    match c {
+        '0'..='9' => Ok((c as u8) - b'0'),
+        'a'..='f' => Ok((c as u8) - b'a' + 10),
+        'A'..='F' => Ok((c as u8) - b'A' + 10),
+        _ => Err(format!("invalid hex character `{c}`")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{parse_args_from, Command};
@@ -2566,6 +2656,34 @@ mod tests {
         match command {
             Command::RunAction { action } => {
                 assert_eq!(action, "pcbnew.InteractiveSelection.ClearSelection")
+            }
+            other => panic!("unexpected command variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_args_parses_create_items() {
+        let (_, command) = parse_args_from(vec![
+            "create-items".to_string(),
+            "--item".to_string(),
+            "type.googleapis.com/kiapi.board.types.Text=0a00".to_string(),
+            "--container-id".to_string(),
+            "container-1".to_string(),
+        ])
+        .expect("create-items args should parse");
+
+        match command {
+            Command::CreateItems {
+                items,
+                container_id,
+            } => {
+                assert_eq!(items.len(), 1);
+                assert_eq!(
+                    items[0].type_url,
+                    "type.googleapis.com/kiapi.board.types.Text"
+                );
+                assert_eq!(items[0].value, vec![0x0a, 0x00]);
+                assert_eq!(container_id.as_deref(), Some("container-1"));
             }
             other => panic!("unexpected command variant: {other:?}"),
         }

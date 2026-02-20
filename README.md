@@ -39,6 +39,7 @@ Deferred manual/runtime verification (implemented after 2026-02-20 while user un
 - `SaveCopyOfDocument`
 - `RevertDocument`
 - `RunAction`
+- `CreateItems`
 
 ## KiCad v10 RC1.1 API Completion Matrix
 
@@ -59,11 +60,11 @@ Legend:
 | Section | Proto Commands | Implemented | Coverage |
 | --- | ---: | ---: | ---: |
 | Common (base) | 6 | 6 | 100% |
-| Common editor/document | 23 | 19 | 83% |
+| Common editor/document | 23 | 20 | 87% |
 | Project manager | 5 | 3 | 60% |
 | Board editor (PCB) | 22 | 20 | 91% |
 | Schematic editor (dedicated proto commands) | 0 | 0 | n/a |
-| **Total** | **56** | **48** | **86%** |
+| **Total** | **56** | **49** | **88%** |
 
 ### Common (base)
 
@@ -88,7 +89,7 @@ Legend:
 | `RunAction` | Implemented | `KiCadClient::run_action_raw`, `KiCadClient::run_action` |
 | `BeginCommit` | Implemented | `KiCadClient::begin_commit_raw`, `KiCadClient::begin_commit` |
 | `EndCommit` | Implemented | `KiCadClient::end_commit_raw`, `KiCadClient::end_commit` |
-| `CreateItems` | Not yet | - |
+| `CreateItems` | Implemented | `KiCadClient::create_items_raw`, `KiCadClient::create_items` |
 | `GetItems` | Implemented | `KiCadClient::get_items_raw_by_type_codes`, `KiCadClient::get_items_by_type_codes`, `KiCadClient::get_items_details_by_type_codes`, `KiCadClient::get_all_pcb_items_raw`, `KiCadClient::get_all_pcb_items`, `KiCadClient::get_all_pcb_items_details`, `KiCadClient::get_pad_netlist` |
 | `GetItemsById` | Implemented | `KiCadClient::get_items_by_id_raw`, `KiCadClient::get_items_by_id`, `KiCadClient::get_items_by_id_details` |
 | `UpdateItems` | Not yet | - |

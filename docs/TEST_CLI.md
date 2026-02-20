@@ -187,6 +187,12 @@ Run a raw KiCad tool action:
 cargo run --bin kicad-ipc-cli -- run-action --action pcbnew.InteractiveSelection.ClearSelection
 ```
 
+Create raw Any item payload(s):
+
+```bash
+cargo run --bin kicad-ipc-cli -- create-items --item type.googleapis.com/kiapi.board.types.Text=<hex_payload>
+```
+
 Show summary of current PCB selection by item type:
 
 ```bash

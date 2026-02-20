@@ -76,6 +76,7 @@ const CMD_REMOVE_FROM_SELECTION: &str = "kiapi.common.commands.RemoveFromSelecti
 const CMD_CLEAR_SELECTION: &str = "kiapi.common.commands.ClearSelection";
 const CMD_BEGIN_COMMIT: &str = "kiapi.common.commands.BeginCommit";
 const CMD_END_COMMIT: &str = "kiapi.common.commands.EndCommit";
+const CMD_CREATE_ITEMS: &str = "kiapi.common.commands.CreateItems";
 const CMD_GET_ITEMS: &str = "kiapi.common.commands.GetItems";
 const CMD_GET_ITEMS_BY_ID: &str = "kiapi.common.commands.GetItemsById";
 const CMD_GET_BOUNDING_BOX: &str = "kiapi.common.commands.GetBoundingBox";
@@ -114,6 +115,7 @@ const RES_VECTOR2: &str = "kiapi.common.types.Vector2";
 const RES_SELECTION_RESPONSE: &str = "kiapi.common.commands.SelectionResponse";
 const RES_BEGIN_COMMIT_RESPONSE: &str = "kiapi.common.commands.BeginCommitResponse";
 const RES_END_COMMIT_RESPONSE: &str = "kiapi.common.commands.EndCommitResponse";
+const RES_CREATE_ITEMS_RESPONSE: &str = "kiapi.common.commands.CreateItemsResponse";
 const RES_GET_ITEMS_RESPONSE: &str = "kiapi.common.commands.GetItemsResponse";
 const RES_GET_BOUNDING_BOX_RESPONSE: &str = "kiapi.common.commands.GetBoundingBoxResponse";
 const RES_HIT_TEST_RESPONSE: &str = "kiapi.common.commands.HitTestResponse";
@@ -614,6 +616,45 @@ impl KiCadClient {
     ) -> Result<(), KiCadError> {
         self.end_commit_raw(session, action, message).await?;
         Ok(())
+    }
+
+    pub async fn create_items_raw(
+        &self,
+        items: Vec<prost_types::Any>,
+        container_id: Option<String>,
+    ) -> Result<prost_types::Any, KiCadError> {
+        let command = common_commands::CreateItems {
+            header: Some(self.current_board_item_header().await?),
+            items,
+            container: container_id.map(|value| common_types::Kiid { value }),
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_CREATE_ITEMS))
+            .await?;
+        response_payload_as_any(response, RES_CREATE_ITEMS_RESPONSE)
+    }
+
+    pub async fn create_items(
+        &self,
+        items: Vec<prost_types::Any>,
+        container_id: Option<String>,
+    ) -> Result<Vec<prost_types::Any>, KiCadError> {
+        let payload = self.create_items_raw(items, container_id).await?;
+        let response: common_commands::CreateItemsResponse =
+            decode_any(&payload, RES_CREATE_ITEMS_RESPONSE)?;
+        ensure_item_request_ok(response.status)?;
+
+        response
+            .created_items
+            .into_iter()
+            .map(|row| {
+                ensure_item_status_ok(row.status)?;
+                row.item.ok_or_else(|| KiCadError::InvalidResponse {
+                    reason: "CreateItemsResponse missing created item payload".to_string(),
+                })
+            })
+            .collect()
     }
 
     pub async fn get_nets(&self) -> Result<Vec<BoardNet>, KiCadError> {
@@ -2063,6 +2104,24 @@ fn ensure_item_request_ok(status: i32) -> Result<(), KiCadError> {
     Ok(())
 }
 
+fn ensure_item_status_ok(status: Option<common_commands::ItemStatus>) -> Result<(), KiCadError> {
+    let status = status.unwrap_or_default();
+    let code = common_commands::ItemStatusCode::try_from(status.code)
+        .unwrap_or(common_commands::ItemStatusCode::IscUnknown);
+
+    if code != common_commands::ItemStatusCode::IscOk {
+        let detail = if status.error_message.is_empty() {
+            code.as_str_name().to_string()
+        } else {
+            format!("{}: {}", code.as_str_name(), status.error_message)
+        };
+
+        return Err(KiCadError::ItemStatus { code: detail });
+    }
+
+    Ok(())
+}
+
 fn map_item_bounding_boxes(
     item_ids: Vec<common_types::Kiid>,
     boxes: Vec<common_types::Box2>,
@@ -3184,8 +3243,8 @@ fn default_client_name() -> String {
 mod tests {
     use super::{
         any_to_pretty_debug, board_editor_appearance_settings_to_proto, commit_action_to_proto,
-        drc_severity_to_proto, ensure_item_request_ok, layer_to_model, map_commit_session,
-        map_hit_test_result, map_item_bounding_boxes, map_polygon_with_holes,
+        drc_severity_to_proto, ensure_item_request_ok, ensure_item_status_ok, layer_to_model,
+        map_commit_session, map_hit_test_result, map_item_bounding_boxes, map_polygon_with_holes,
         map_run_action_status, model_document_to_proto, normalize_socket_uri,
         pad_netlist_from_footprint_items, response_payload_as_any, select_single_board_document,
         select_single_project_path, selection_item_detail, summarize_item_details,
@@ -3593,6 +3652,27 @@ mod tests {
             crate::proto::kiapi::common::types::ItemRequestStatus::IrsDocumentNotFound as i32
         )
         .is_err());
+    }
+
+    #[test]
+    fn ensure_item_status_ok_accepts_ok_and_rejects_non_ok() {
+        assert!(
+            ensure_item_status_ok(Some(crate::proto::kiapi::common::commands::ItemStatus {
+                code: crate::proto::kiapi::common::commands::ItemStatusCode::IscOk as i32,
+                error_message: String::new(),
+            }))
+            .is_ok()
+        );
+
+        let err = ensure_item_status_ok(Some(crate::proto::kiapi::common::commands::ItemStatus {
+            code: crate::proto::kiapi::common::commands::ItemStatusCode::IscInvalidType as i32,
+            error_message: "bad item type".to_string(),
+        }))
+        .expect_err("non-OK item status should fail");
+        match err {
+            KiCadError::ItemStatus { code } => assert!(code.contains("ISC_INVALID_TYPE")),
+            _ => panic!("expected item status error"),
+        }
     }
 
     #[test]
