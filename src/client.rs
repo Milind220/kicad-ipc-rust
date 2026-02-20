@@ -6,18 +6,27 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::envelope;
 use crate::error::KiCadError;
 use crate::model::board::{
-    ArcStartMidEndNm, BoardEnabledLayers, BoardLayerInfo, BoardNet, BoardOriginKind, PadNetEntry,
-    PadShapeAsPolygonEntry, PadstackPresenceEntry, PolyLineNm, PolyLineNodeGeometryNm,
-    PolygonWithHolesNm, Vector2Nm,
+    ArcStartMidEndNm, BoardEditorAppearanceSettings, BoardEnabledLayers, BoardFlipMode,
+    BoardLayerClass, BoardLayerGraphicsDefault, BoardLayerInfo, BoardNet, BoardOriginKind,
+    BoardStackup, BoardStackupDielectricProperties, BoardStackupLayer, BoardStackupLayerType,
+    ColorRgba, GraphicsDefaults, InactiveLayerDisplayMode, NetClassBoardSettings,
+    NetClassForNetEntry, NetClassInfo, NetClassType, NetColorDisplayMode, PadNetEntry,
+    PadShapeAsPolygonEntry, PadstackPresenceEntry, PadstackPresenceState, PcbArc,
+    PcbBoardGraphicShape, PcbBoardText, PcbBoardTextBox, PcbDimension, PcbField, PcbFootprint,
+    PcbGroup, PcbItem, PcbPad, PcbPadType, PcbTrack, PcbUnknownItem, PcbVia, PcbViaType, PcbZone,
+    PcbZoneType, PolyLineNm, PolyLineNodeGeometryNm, PolygonWithHolesNm, RatsnestDisplayMode,
+    Vector2Nm,
 };
 use crate::model::common::{
     DocumentSpecifier, DocumentType, ItemBoundingBox, ItemHitTestResult, PcbObjectTypeCode,
     ProjectInfo, SelectionItemDetail, SelectionSummary, SelectionTypeCount, TitleBlockInfo,
     VersionInfo,
 };
+use crate::proto::kiapi::board as board_proto;
 use crate::proto::kiapi::board::commands as board_commands;
 use crate::proto::kiapi::board::types as board_types;
 use crate::proto::kiapi::common::commands as common_commands;
+use crate::proto::kiapi::common::project as common_project;
 use crate::proto::kiapi::common::types as common_types;
 use crate::transport::Transport;
 
@@ -446,6 +455,11 @@ impl KiCadClient {
         summarize_item_details(items)
     }
 
+    pub async fn get_selection(&self) -> Result<Vec<PcbItem>, KiCadError> {
+        let items = self.get_selection_raw().await?;
+        decode_pcb_items(items)
+    }
+
     pub async fn get_pad_netlist(&self) -> Result<Vec<PadNetEntry>, KiCadError> {
         let footprint_items = self
             .get_items_raw(vec![common_types::KiCadObjectType::KotPcbFootprint as i32])
@@ -483,6 +497,14 @@ impl KiCadClient {
         summarize_item_details(items)
     }
 
+    pub async fn get_items_by_type_codes(
+        &self,
+        type_codes: Vec<i32>,
+    ) -> Result<Vec<PcbItem>, KiCadError> {
+        let items = self.get_items_raw(type_codes).await?;
+        decode_pcb_items(items)
+    }
+
     pub async fn get_all_pcb_items_raw(
         &self,
     ) -> Result<Vec<(PcbObjectTypeCode, Vec<prost_types::Any>)>, KiCadError> {
@@ -502,6 +524,18 @@ impl KiCadClient {
         for object_type in PCB_OBJECT_TYPES {
             let items = self.get_items_raw(vec![object_type.code]).await?;
             rows.push((object_type, summarize_item_details(items)?));
+        }
+
+        Ok(rows)
+    }
+
+    pub async fn get_all_pcb_items(
+        &self,
+    ) -> Result<Vec<(PcbObjectTypeCode, Vec<PcbItem>)>, KiCadError> {
+        let mut rows = Vec::with_capacity(PCB_OBJECT_TYPES.len());
+        for object_type in PCB_OBJECT_TYPES {
+            let items = self.get_items_raw(vec![object_type.code]).await?;
+            rows.push((object_type, decode_pcb_items(items)?));
         }
 
         Ok(rows)
@@ -530,6 +564,15 @@ impl KiCadClient {
         Ok(payload.items)
     }
 
+    pub async fn get_items_by_net(
+        &self,
+        type_codes: Vec<i32>,
+        net_codes: Vec<i32>,
+    ) -> Result<Vec<PcbItem>, KiCadError> {
+        let items = self.get_items_by_net_raw(type_codes, net_codes).await?;
+        decode_pcb_items(items)
+    }
+
     pub async fn get_items_by_net_class_raw(
         &self,
         type_codes: Vec<i32>,
@@ -550,10 +593,21 @@ impl KiCadClient {
         Ok(payload.items)
     }
 
-    pub async fn get_netclass_for_nets_debug(
+    pub async fn get_items_by_net_class(
+        &self,
+        type_codes: Vec<i32>,
+        net_classes: Vec<String>,
+    ) -> Result<Vec<PcbItem>, KiCadError> {
+        let items = self
+            .get_items_by_net_class_raw(type_codes, net_classes)
+            .await?;
+        decode_pcb_items(items)
+    }
+
+    pub async fn get_netclass_for_nets_raw(
         &self,
         nets: Vec<BoardNet>,
-    ) -> Result<String, KiCadError> {
+    ) -> Result<prost_types::Any, KiCadError> {
         let command = board_commands::GetNetClassForNets {
             net: nets
                 .into_iter()
@@ -567,9 +621,52 @@ impl KiCadClient {
         let response = self
             .send_command(envelope::pack_any(&command, CMD_GET_NETCLASS_FOR_NETS))
             .await?;
-        let payload: board_commands::NetClassForNetsResponse =
-            envelope::unpack_any(&response, RES_NETCLASS_FOR_NETS_RESPONSE)?;
-        Ok(format!("{:#?}", payload.classes))
+
+        response_payload_as_any(response, RES_NETCLASS_FOR_NETS_RESPONSE)
+    }
+
+    pub async fn get_netclass_for_nets(
+        &self,
+        nets: Vec<BoardNet>,
+    ) -> Result<Vec<NetClassForNetEntry>, KiCadError> {
+        let payload = self.get_netclass_for_nets_raw(nets).await?;
+        let response: board_commands::NetClassForNetsResponse =
+            decode_any(&payload, RES_NETCLASS_FOR_NETS_RESPONSE)?;
+        Ok(map_netclass_for_nets_response(response))
+    }
+
+    pub async fn get_pad_shape_as_polygon_raw(
+        &self,
+        pad_ids: Vec<String>,
+        layer_id: i32,
+    ) -> Result<Vec<prost_types::Any>, KiCadError> {
+        if pad_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let board = self.current_board_document_proto().await?;
+        let mut payloads = Vec::new();
+        for chunk in pad_ids.chunks(PAD_QUERY_CHUNK_SIZE) {
+            let command = board_commands::GetPadShapeAsPolygon {
+                board: Some(board.clone()),
+                pads: chunk
+                    .iter()
+                    .cloned()
+                    .map(|value| common_types::Kiid { value })
+                    .collect(),
+                layer: layer_id,
+            };
+
+            let response = self
+                .send_command(envelope::pack_any(&command, CMD_GET_PAD_SHAPE_AS_POLYGON))
+                .await?;
+            payloads.push(response_payload_as_any(
+                response,
+                RES_PAD_SHAPE_AS_POLYGON_RESPONSE,
+            )?);
+        }
+
+        Ok(payloads)
     }
 
     pub async fn get_pad_shape_as_polygon(
@@ -581,14 +678,13 @@ impl KiCadClient {
             return Ok(Vec::new());
         }
 
-        let board = self.current_board_document_proto().await?;
         let mut entries = Vec::new();
         let layer_name = layer_to_model(layer_id).name;
 
-        for chunk in pad_ids.chunks(PAD_QUERY_CHUNK_SIZE) {
-            let payload = self
-                .request_pad_shape_as_polygon(&board, chunk, layer_id)
-                .await?;
+        let payloads = self.get_pad_shape_as_polygon_raw(pad_ids, layer_id).await?;
+        for payload in payloads {
+            let payload: board_commands::PadShapeAsPolygonResponse =
+                decode_any(&payload, RES_PAD_SHAPE_AS_POLYGON_RESPONSE)?;
 
             if payload.pads.len() != payload.polygons.len() {
                 return Err(KiCadError::InvalidResponse {
@@ -613,25 +709,40 @@ impl KiCadClient {
         Ok(entries)
     }
 
-    pub async fn get_pad_shape_as_polygon_debug(
+    pub async fn check_padstack_presence_on_layers_raw(
         &self,
-        pad_ids: Vec<String>,
-        layer_id: i32,
-    ) -> Result<String, KiCadError> {
-        if pad_ids.is_empty() {
-            return Ok("PadShapeAsPolygonResponse { pads: [], polygons: [] }".to_string());
+        item_ids: Vec<String>,
+        layer_ids: Vec<i32>,
+    ) -> Result<Vec<prost_types::Any>, KiCadError> {
+        if item_ids.is_empty() || layer_ids.is_empty() {
+            return Ok(Vec::new());
         }
 
         let board = self.current_board_document_proto().await?;
-        let mut debug_chunks = Vec::new();
-        for chunk in pad_ids.chunks(PAD_QUERY_CHUNK_SIZE) {
-            let payload = self
-                .request_pad_shape_as_polygon(&board, chunk, layer_id)
+        let mut payloads = Vec::new();
+        for chunk in item_ids.chunks(PAD_QUERY_CHUNK_SIZE) {
+            let command = board_commands::CheckPadstackPresenceOnLayers {
+                board: Some(board.clone()),
+                items: chunk
+                    .iter()
+                    .cloned()
+                    .map(|value| common_types::Kiid { value })
+                    .collect(),
+                layers: layer_ids.clone(),
+            };
+            let response = self
+                .send_command(envelope::pack_any(
+                    &command,
+                    CMD_CHECK_PADSTACK_PRESENCE_ON_LAYERS,
+                ))
                 .await?;
-            debug_chunks.push(format!("{:#?}", payload));
+            payloads.push(response_payload_as_any(
+                response,
+                RES_PADSTACK_PRESENCE_RESPONSE,
+            )?);
         }
 
-        Ok(debug_chunks.join("\n\n"))
+        Ok(payloads)
     }
 
     pub async fn check_padstack_presence_on_layers(
@@ -643,21 +754,20 @@ impl KiCadClient {
             return Ok(Vec::new());
         }
 
-        let board = self.current_board_document_proto().await?;
         let mut entries = Vec::new();
-        for chunk in item_ids.chunks(PAD_QUERY_CHUNK_SIZE) {
-            let payload = self
-                .request_padstack_presence_on_layers(&board, chunk, &layer_ids)
-                .await?;
+        let payloads = self
+            .check_padstack_presence_on_layers_raw(item_ids, layer_ids)
+            .await?;
+        for payload in payloads {
+            let payload: board_commands::PadstackPresenceResponse =
+                decode_any(&payload, RES_PADSTACK_PRESENCE_RESPONSE)?;
             for row in payload.entries {
                 let item = row.item.ok_or_else(|| KiCadError::InvalidResponse {
                     reason: "PadstackPresenceEntry missing item id".to_string(),
                 })?;
 
                 let layer = layer_to_model(row.layer);
-                let presence = board_commands::PadstackPresence::try_from(row.presence)
-                    .map(|value| value.as_str_name().to_string())
-                    .unwrap_or_else(|_| format!("UNKNOWN({})", row.presence));
+                let presence = map_padstack_presence(row.presence);
 
                 entries.push(PadstackPresenceEntry {
                     item_id: item.value,
@@ -671,28 +781,7 @@ impl KiCadClient {
         Ok(entries)
     }
 
-    pub async fn check_padstack_presence_on_layers_debug(
-        &self,
-        item_ids: Vec<String>,
-        layer_ids: Vec<i32>,
-    ) -> Result<String, KiCadError> {
-        if item_ids.is_empty() || layer_ids.is_empty() {
-            return Ok("PadstackPresenceResponse { entries: [] }".to_string());
-        }
-
-        let board = self.current_board_document_proto().await?;
-        let mut debug_chunks = Vec::new();
-        for chunk in item_ids.chunks(PAD_QUERY_CHUNK_SIZE) {
-            let payload = self
-                .request_padstack_presence_on_layers(&board, chunk, &layer_ids)
-                .await?;
-            debug_chunks.push(format!("{:#?}", payload));
-        }
-
-        Ok(debug_chunks.join("\n\n"))
-    }
-
-    pub async fn get_board_stackup_debug(&self) -> Result<String, KiCadError> {
+    pub async fn get_board_stackup_raw(&self) -> Result<prost_types::Any, KiCadError> {
         let command = board_commands::GetBoardStackup {
             board: Some(self.current_board_document_proto().await?),
         };
@@ -700,12 +789,18 @@ impl KiCadClient {
         let response = self
             .send_command(envelope::pack_any(&command, CMD_GET_BOARD_STACKUP))
             .await?;
-        let payload: board_commands::BoardStackupResponse =
-            envelope::unpack_any(&response, RES_BOARD_STACKUP_RESPONSE)?;
-        Ok(format!("{:#?}", payload.stackup))
+
+        response_payload_as_any(response, RES_BOARD_STACKUP_RESPONSE)
     }
 
-    pub async fn get_graphics_defaults_debug(&self) -> Result<String, KiCadError> {
+    pub async fn get_board_stackup(&self) -> Result<BoardStackup, KiCadError> {
+        let payload = self.get_board_stackup_raw().await?;
+        let response: board_commands::BoardStackupResponse =
+            decode_any(&payload, RES_BOARD_STACKUP_RESPONSE)?;
+        Ok(map_board_stackup(response.stackup.unwrap_or_default()))
+    }
+
+    pub async fn get_graphics_defaults_raw(&self) -> Result<prost_types::Any, KiCadError> {
         let command = board_commands::GetGraphicsDefaults {
             board: Some(self.current_board_document_proto().await?),
         };
@@ -713,12 +808,20 @@ impl KiCadClient {
         let response = self
             .send_command(envelope::pack_any(&command, CMD_GET_GRAPHICS_DEFAULTS))
             .await?;
-        let payload: board_commands::GraphicsDefaultsResponse =
-            envelope::unpack_any(&response, RES_GRAPHICS_DEFAULTS_RESPONSE)?;
-        Ok(format!("{:#?}", payload.defaults))
+
+        response_payload_as_any(response, RES_GRAPHICS_DEFAULTS_RESPONSE)
     }
 
-    pub async fn get_board_editor_appearance_settings_debug(&self) -> Result<String, KiCadError> {
+    pub async fn get_graphics_defaults(&self) -> Result<GraphicsDefaults, KiCadError> {
+        let payload = self.get_graphics_defaults_raw().await?;
+        let response: board_commands::GraphicsDefaultsResponse =
+            decode_any(&payload, RES_GRAPHICS_DEFAULTS_RESPONSE)?;
+        Ok(map_graphics_defaults(response.defaults.unwrap_or_default()))
+    }
+
+    pub async fn get_board_editor_appearance_settings_raw(
+        &self,
+    ) -> Result<prost_types::Any, KiCadError> {
         let command = board_commands::GetBoardEditorAppearanceSettings {};
 
         let response = self
@@ -727,9 +830,17 @@ impl KiCadClient {
                 CMD_GET_BOARD_EDITOR_APPEARANCE_SETTINGS,
             ))
             .await?;
-        let payload: board_commands::BoardEditorAppearanceSettings =
-            envelope::unpack_any(&response, RES_BOARD_EDITOR_APPEARANCE_SETTINGS)?;
-        Ok(format!("{:#?}", payload))
+
+        response_payload_as_any(response, RES_BOARD_EDITOR_APPEARANCE_SETTINGS)
+    }
+
+    pub async fn get_board_editor_appearance_settings(
+        &self,
+    ) -> Result<BoardEditorAppearanceSettings, KiCadError> {
+        let payload = self.get_board_editor_appearance_settings_raw().await?;
+        let response: board_commands::BoardEditorAppearanceSettings =
+            decode_any(&payload, RES_BOARD_EDITOR_APPEARANCE_SETTINGS)?;
+        Ok(map_board_editor_appearance_settings(response))
     }
 
     pub async fn get_title_block_info(&self) -> Result<TitleBlockInfo, KiCadError> {
@@ -824,6 +935,11 @@ impl KiCadClient {
     ) -> Result<Vec<SelectionItemDetail>, KiCadError> {
         let items = self.get_items_by_id_raw(item_ids).await?;
         summarize_item_details(items)
+    }
+
+    pub async fn get_items_by_id(&self, item_ids: Vec<String>) -> Result<Vec<PcbItem>, KiCadError> {
+        let items = self.get_items_by_id_raw(item_ids).await?;
+        decode_pcb_items(items)
     }
 
     pub async fn get_item_bounding_boxes(
@@ -953,55 +1069,6 @@ impl KiCadClient {
 
         ensure_item_request_ok(payload.status)?;
         Ok(payload.items)
-    }
-
-    async fn request_pad_shape_as_polygon(
-        &self,
-        board: &common_types::DocumentSpecifier,
-        pad_ids: &[String],
-        layer_id: i32,
-    ) -> Result<board_commands::PadShapeAsPolygonResponse, KiCadError> {
-        let command = board_commands::GetPadShapeAsPolygon {
-            board: Some(board.clone()),
-            pads: pad_ids
-                .iter()
-                .cloned()
-                .map(|value| common_types::Kiid { value })
-                .collect(),
-            layer: layer_id,
-        };
-
-        let response = self
-            .send_command(envelope::pack_any(&command, CMD_GET_PAD_SHAPE_AS_POLYGON))
-            .await?;
-
-        envelope::unpack_any(&response, RES_PAD_SHAPE_AS_POLYGON_RESPONSE)
-    }
-
-    async fn request_padstack_presence_on_layers(
-        &self,
-        board: &common_types::DocumentSpecifier,
-        item_ids: &[String],
-        layer_ids: &[i32],
-    ) -> Result<board_commands::PadstackPresenceResponse, KiCadError> {
-        let command = board_commands::CheckPadstackPresenceOnLayers {
-            board: Some(board.clone()),
-            items: item_ids
-                .iter()
-                .cloned()
-                .map(|value| common_types::Kiid { value })
-                .collect(),
-            layers: layer_ids.to_vec(),
-        };
-
-        let response = self
-            .send_command(envelope::pack_any(
-                &command,
-                CMD_CHECK_PADSTACK_PRESENCE_ON_LAYERS,
-            ))
-            .await?;
-
-        envelope::unpack_any(&response, RES_PADSTACK_PRESENCE_RESPONSE)
     }
 }
 
@@ -1230,6 +1297,457 @@ fn decode_any<T: prost::Message + Default>(
     }
 
     T::decode(payload.value.as_slice()).map_err(|err| KiCadError::ProtobufDecode(err.to_string()))
+}
+
+fn response_payload_as_any(
+    response: crate::proto::kiapi::common::ApiResponse,
+    expected_type_name: &str,
+) -> Result<prost_types::Any, KiCadError> {
+    let payload = response.message.ok_or_else(|| KiCadError::MissingPayload {
+        expected_type_url: envelope::type_url(expected_type_name),
+    })?;
+
+    let expected_type_url = envelope::type_url(expected_type_name);
+    if payload.type_url != expected_type_url {
+        return Err(KiCadError::UnexpectedPayloadType {
+            expected_type_url,
+            actual_type_url: payload.type_url,
+        });
+    }
+
+    Ok(payload)
+}
+
+fn map_optional_distance_nm(distance: Option<common_types::Distance>) -> Option<i64> {
+    distance.map(|value| value.value_nm)
+}
+
+fn map_optional_color(color: Option<common_types::Color>) -> Option<ColorRgba> {
+    color.map(|value| ColorRgba {
+        r: value.r,
+        g: value.g,
+        b: value.b,
+        a: value.a,
+    })
+}
+
+fn map_optional_net(net: Option<board_types::Net>) -> Option<BoardNet> {
+    net.map(|value| BoardNet {
+        code: value.code.map_or(0, |code| code.value),
+        name: value.name,
+    })
+}
+
+fn map_padstack_presence(value: i32) -> PadstackPresenceState {
+    match board_commands::PadstackPresence::try_from(value) {
+        Ok(board_commands::PadstackPresence::PspPresent) => PadstackPresenceState::Present,
+        Ok(board_commands::PadstackPresence::PspNotPresent) => PadstackPresenceState::NotPresent,
+        _ => PadstackPresenceState::Unknown(value),
+    }
+}
+
+fn map_board_stackup_layer_type(value: i32) -> BoardStackupLayerType {
+    match board_proto::BoardStackupLayerType::try_from(value) {
+        Ok(board_proto::BoardStackupLayerType::BsltCopper) => BoardStackupLayerType::Copper,
+        Ok(board_proto::BoardStackupLayerType::BsltDielectric) => BoardStackupLayerType::Dielectric,
+        Ok(board_proto::BoardStackupLayerType::BsltSilkscreen) => BoardStackupLayerType::Silkscreen,
+        Ok(board_proto::BoardStackupLayerType::BsltSoldermask) => BoardStackupLayerType::SolderMask,
+        Ok(board_proto::BoardStackupLayerType::BsltSolderpaste) => {
+            BoardStackupLayerType::SolderPaste
+        }
+        Ok(board_proto::BoardStackupLayerType::BsltUndefined) => BoardStackupLayerType::Undefined,
+        _ => BoardStackupLayerType::Unknown(value),
+    }
+}
+
+fn map_board_layer_class(value: i32) -> BoardLayerClass {
+    match board_proto::BoardLayerClass::try_from(value) {
+        Ok(board_proto::BoardLayerClass::BlcSilkscreen) => BoardLayerClass::Silkscreen,
+        Ok(board_proto::BoardLayerClass::BlcCopper) => BoardLayerClass::Copper,
+        Ok(board_proto::BoardLayerClass::BlcEdges) => BoardLayerClass::Edges,
+        Ok(board_proto::BoardLayerClass::BlcCourtyard) => BoardLayerClass::Courtyard,
+        Ok(board_proto::BoardLayerClass::BlcFabrication) => BoardLayerClass::Fabrication,
+        Ok(board_proto::BoardLayerClass::BlcOther) => BoardLayerClass::Other,
+        _ => BoardLayerClass::Unknown(value),
+    }
+}
+
+fn map_inactive_layer_display_mode(value: i32) -> InactiveLayerDisplayMode {
+    match board_commands::InactiveLayerDisplayMode::try_from(value) {
+        Ok(board_commands::InactiveLayerDisplayMode::IldmNormal) => {
+            InactiveLayerDisplayMode::Normal
+        }
+        Ok(board_commands::InactiveLayerDisplayMode::IldmDimmed) => {
+            InactiveLayerDisplayMode::Dimmed
+        }
+        Ok(board_commands::InactiveLayerDisplayMode::IldmHidden) => {
+            InactiveLayerDisplayMode::Hidden
+        }
+        _ => InactiveLayerDisplayMode::Unknown(value),
+    }
+}
+
+fn map_net_color_display_mode(value: i32) -> NetColorDisplayMode {
+    match board_commands::NetColorDisplayMode::try_from(value) {
+        Ok(board_commands::NetColorDisplayMode::NcdmAll) => NetColorDisplayMode::All,
+        Ok(board_commands::NetColorDisplayMode::NcdmRatsnest) => NetColorDisplayMode::Ratsnest,
+        Ok(board_commands::NetColorDisplayMode::NcdmOff) => NetColorDisplayMode::Off,
+        _ => NetColorDisplayMode::Unknown(value),
+    }
+}
+
+fn map_board_flip_mode(value: i32) -> BoardFlipMode {
+    match board_commands::BoardFlipMode::try_from(value) {
+        Ok(board_commands::BoardFlipMode::BfmNormal) => BoardFlipMode::Normal,
+        Ok(board_commands::BoardFlipMode::BfmFlippedX) => BoardFlipMode::FlippedX,
+        _ => BoardFlipMode::Unknown(value),
+    }
+}
+
+fn map_ratsnest_display_mode(value: i32) -> RatsnestDisplayMode {
+    match board_commands::RatsnestDisplayMode::try_from(value) {
+        Ok(board_commands::RatsnestDisplayMode::RdmAllLayers) => RatsnestDisplayMode::AllLayers,
+        Ok(board_commands::RatsnestDisplayMode::RdmVisibleLayers) => {
+            RatsnestDisplayMode::VisibleLayers
+        }
+        _ => RatsnestDisplayMode::Unknown(value),
+    }
+}
+
+fn map_board_stackup(stackup: board_proto::BoardStackup) -> BoardStackup {
+    let finish_type_name = stackup
+        .finish
+        .map(|finish| finish.type_name)
+        .unwrap_or_default();
+    let impedance_controlled = stackup
+        .impedance
+        .map(|impedance| impedance.is_controlled)
+        .unwrap_or(false);
+    let edge = stackup.edge.unwrap_or_default();
+    let edge_has_castellated_pads = edge
+        .castellation
+        .map(|value| value.has_castellated_pads)
+        .unwrap_or(false);
+    let edge_has_edge_plating = edge
+        .plating
+        .map(|value| value.has_edge_plating)
+        .unwrap_or(false);
+
+    let layers = stackup
+        .layers
+        .into_iter()
+        .map(|layer| BoardStackupLayer {
+            layer: layer_to_model(layer.layer),
+            user_name: layer.user_name,
+            material_name: layer.material_name,
+            enabled: layer.enabled,
+            thickness_nm: map_optional_distance_nm(layer.thickness),
+            layer_type: map_board_stackup_layer_type(layer.r#type),
+            color: map_optional_color(layer.color),
+            dielectric_layers: layer
+                .dielectric
+                .unwrap_or_default()
+                .layer
+                .into_iter()
+                .map(|dielectric| BoardStackupDielectricProperties {
+                    epsilon_r: dielectric.epsilon_r,
+                    loss_tangent: dielectric.loss_tangent,
+                    material_name: dielectric.material_name,
+                    thickness_nm: map_optional_distance_nm(dielectric.thickness),
+                })
+                .collect(),
+        })
+        .collect();
+
+    BoardStackup {
+        finish_type_name,
+        impedance_controlled,
+        edge_has_castellated_pads,
+        edge_has_edge_plating,
+        layers,
+    }
+}
+
+fn map_graphics_defaults(defaults: board_proto::GraphicsDefaults) -> GraphicsDefaults {
+    GraphicsDefaults {
+        layers: defaults
+            .layers
+            .into_iter()
+            .map(|layer| {
+                let text = layer.text.unwrap_or_default();
+                let text_font_name = if text.font_name.is_empty() {
+                    None
+                } else {
+                    Some(text.font_name)
+                };
+                BoardLayerGraphicsDefault {
+                    layer_class: map_board_layer_class(layer.layer),
+                    line_thickness_nm: map_optional_distance_nm(layer.line_thickness),
+                    text_font_name,
+                    text_size_nm: text.size.map(map_vector2_nm),
+                    text_stroke_width_nm: map_optional_distance_nm(text.stroke_width),
+                }
+            })
+            .collect(),
+    }
+}
+
+fn map_board_editor_appearance_settings(
+    settings: board_commands::BoardEditorAppearanceSettings,
+) -> BoardEditorAppearanceSettings {
+    BoardEditorAppearanceSettings {
+        inactive_layer_display: map_inactive_layer_display_mode(settings.inactive_layer_display),
+        net_color_display: map_net_color_display_mode(settings.net_color_display),
+        board_flip: map_board_flip_mode(settings.board_flip),
+        ratsnest_display: map_ratsnest_display_mode(settings.ratsnest_display),
+    }
+}
+
+fn map_net_class_type(value: i32) -> NetClassType {
+    match common_project::NetClassType::try_from(value) {
+        Ok(common_project::NetClassType::NctExplicit) => NetClassType::Explicit,
+        Ok(common_project::NetClassType::NctImplicit) => NetClassType::Implicit,
+        _ => NetClassType::Unknown(value),
+    }
+}
+
+fn map_net_class_info(net_class: common_project::NetClass) -> NetClassInfo {
+    let board = net_class.board.map(|board| NetClassBoardSettings {
+        clearance_nm: map_optional_distance_nm(board.clearance),
+        track_width_nm: map_optional_distance_nm(board.track_width),
+        diff_pair_track_width_nm: map_optional_distance_nm(board.diff_pair_track_width),
+        diff_pair_gap_nm: map_optional_distance_nm(board.diff_pair_gap),
+        diff_pair_via_gap_nm: map_optional_distance_nm(board.diff_pair_via_gap),
+        color: map_optional_color(board.color),
+        tuning_profile: board.tuning_profile.filter(|value| !value.is_empty()),
+        has_via_stack: board.via_stack.is_some(),
+        has_microvia_stack: board.microvia_stack.is_some(),
+    });
+
+    NetClassInfo {
+        name: net_class.name,
+        priority: net_class.priority,
+        class_type: map_net_class_type(net_class.r#type),
+        constituents: net_class.constituents,
+        board,
+    }
+}
+
+fn map_netclass_for_nets_response(
+    response: board_commands::NetClassForNetsResponse,
+) -> Vec<NetClassForNetEntry> {
+    let mut rows: Vec<(String, common_project::NetClass)> = response.classes.into_iter().collect();
+    rows.sort_by(|left, right| left.0.cmp(&right.0));
+
+    rows.into_iter()
+        .map(|(net_name, net_class)| NetClassForNetEntry {
+            net_name,
+            net_class: map_net_class_info(net_class),
+        })
+        .collect()
+}
+
+fn map_via_type(value: i32) -> PcbViaType {
+    match board_types::ViaType::try_from(value) {
+        Ok(board_types::ViaType::VtThrough) => PcbViaType::Through,
+        Ok(board_types::ViaType::VtBlindBuried) => PcbViaType::BlindBuried,
+        Ok(board_types::ViaType::VtMicro) => PcbViaType::Micro,
+        Ok(board_types::ViaType::VtBlind) => PcbViaType::Blind,
+        Ok(board_types::ViaType::VtBuried) => PcbViaType::Buried,
+        _ => PcbViaType::Unknown(value),
+    }
+}
+
+fn map_pad_type(value: i32) -> PcbPadType {
+    match board_types::PadType::try_from(value) {
+        Ok(board_types::PadType::PtPth) => PcbPadType::Pth,
+        Ok(board_types::PadType::PtSmd) => PcbPadType::Smd,
+        Ok(board_types::PadType::PtEdgeConnector) => PcbPadType::EdgeConnector,
+        Ok(board_types::PadType::PtNpth) => PcbPadType::Npth,
+        _ => PcbPadType::Unknown(value),
+    }
+}
+
+fn map_zone_type(value: i32) -> PcbZoneType {
+    match board_types::ZoneType::try_from(value) {
+        Ok(board_types::ZoneType::ZtCopper) => PcbZoneType::Copper,
+        Ok(board_types::ZoneType::ZtGraphical) => PcbZoneType::Graphical,
+        Ok(board_types::ZoneType::ZtRuleArea) => PcbZoneType::RuleArea,
+        Ok(board_types::ZoneType::ZtTeardrop) => PcbZoneType::Teardrop,
+        _ => PcbZoneType::Unknown(value),
+    }
+}
+
+fn decode_pcb_items(items: Vec<prost_types::Any>) -> Result<Vec<PcbItem>, KiCadError> {
+    items.into_iter().map(decode_pcb_item).collect()
+}
+
+fn decode_pcb_item(item: prost_types::Any) -> Result<PcbItem, KiCadError> {
+    if item.type_url == envelope::type_url("kiapi.board.types.Track") {
+        let track = decode_any::<board_types::Track>(&item, "kiapi.board.types.Track")?;
+        return Ok(PcbItem::Track(PcbTrack {
+            id: track.id.map(|id| id.value),
+            start_nm: track.start.map(map_vector2_nm),
+            end_nm: track.end.map(map_vector2_nm),
+            width_nm: map_optional_distance_nm(track.width),
+            layer: layer_to_model(track.layer),
+            net: map_optional_net(track.net),
+        }));
+    }
+
+    if item.type_url == envelope::type_url("kiapi.board.types.Arc") {
+        let arc = decode_any::<board_types::Arc>(&item, "kiapi.board.types.Arc")?;
+        return Ok(PcbItem::Arc(PcbArc {
+            id: arc.id.map(|id| id.value),
+            start_nm: arc.start.map(map_vector2_nm),
+            mid_nm: arc.mid.map(map_vector2_nm),
+            end_nm: arc.end.map(map_vector2_nm),
+            width_nm: map_optional_distance_nm(arc.width),
+            layer: layer_to_model(arc.layer),
+            net: map_optional_net(arc.net),
+        }));
+    }
+
+    if item.type_url == envelope::type_url("kiapi.board.types.Via") {
+        let via = decode_any::<board_types::Via>(&item, "kiapi.board.types.Via")?;
+        return Ok(PcbItem::Via(PcbVia {
+            id: via.id.map(|id| id.value),
+            position_nm: via.position.map(map_vector2_nm),
+            via_type: map_via_type(via.r#type),
+            net: map_optional_net(via.net),
+        }));
+    }
+
+    if item.type_url == envelope::type_url("kiapi.board.types.FootprintInstance") {
+        let footprint = decode_any::<board_types::FootprintInstance>(
+            &item,
+            "kiapi.board.types.FootprintInstance",
+        )?;
+        let reference = footprint
+            .reference_field
+            .as_ref()
+            .and_then(|field| field.text.as_ref())
+            .and_then(|board_text| board_text.text.as_ref())
+            .map(|text| text.text.clone())
+            .filter(|value| !value.is_empty());
+        let pad_count = footprint
+            .definition
+            .as_ref()
+            .map(|definition| {
+                definition
+                    .items
+                    .iter()
+                    .filter(|entry| entry.type_url == envelope::type_url("kiapi.board.types.Pad"))
+                    .count()
+            })
+            .unwrap_or(0);
+
+        return Ok(PcbItem::Footprint(PcbFootprint {
+            id: footprint.id.map(|id| id.value),
+            reference,
+            position_nm: footprint.position.map(map_vector2_nm),
+            orientation_deg: footprint.orientation.map(|angle| angle.value_degrees),
+            layer: layer_to_model(footprint.layer),
+            pad_count,
+        }));
+    }
+
+    if item.type_url == envelope::type_url("kiapi.board.types.Pad") {
+        let pad = decode_any::<board_types::Pad>(&item, "kiapi.board.types.Pad")?;
+        return Ok(PcbItem::Pad(PcbPad {
+            id: pad.id.map(|id| id.value),
+            number: pad.number,
+            pad_type: map_pad_type(pad.r#type),
+            position_nm: pad.position.map(map_vector2_nm),
+            net: map_optional_net(pad.net),
+        }));
+    }
+
+    if item.type_url == envelope::type_url("kiapi.board.types.BoardGraphicShape") {
+        let shape = decode_any::<board_types::BoardGraphicShape>(
+            &item,
+            "kiapi.board.types.BoardGraphicShape",
+        )?;
+        let geometry_kind = shape
+            .shape
+            .as_ref()
+            .and_then(|graphic| graphic.geometry.as_ref())
+            .map(|value| format!("{value:?}"));
+        return Ok(PcbItem::BoardGraphicShape(PcbBoardGraphicShape {
+            id: shape.id.map(|id| id.value),
+            layer: layer_to_model(shape.layer),
+            net: map_optional_net(shape.net),
+            geometry_kind,
+        }));
+    }
+
+    if item.type_url == envelope::type_url("kiapi.board.types.BoardText") {
+        let text = decode_any::<board_types::BoardText>(&item, "kiapi.board.types.BoardText")?;
+        return Ok(PcbItem::BoardText(PcbBoardText {
+            id: text.id.map(|id| id.value),
+            layer: layer_to_model(text.layer),
+            text: text.text.map(|value| value.text),
+        }));
+    }
+
+    if item.type_url == envelope::type_url("kiapi.board.types.BoardTextBox") {
+        let textbox =
+            decode_any::<board_types::BoardTextBox>(&item, "kiapi.board.types.BoardTextBox")?;
+        return Ok(PcbItem::BoardTextBox(PcbBoardTextBox {
+            id: textbox.id.map(|id| id.value),
+            layer: layer_to_model(textbox.layer),
+            text: textbox.textbox.map(|value| value.text),
+        }));
+    }
+
+    if item.type_url == envelope::type_url("kiapi.board.types.Field") {
+        let field = decode_any::<board_types::Field>(&item, "kiapi.board.types.Field")?;
+        let text = field
+            .text
+            .and_then(|board_text| board_text.text)
+            .map(|value| value.text);
+        return Ok(PcbItem::Field(PcbField {
+            name: field.name,
+            visible: field.visible,
+            text,
+        }));
+    }
+
+    if item.type_url == envelope::type_url("kiapi.board.types.Zone") {
+        let zone = decode_any::<board_types::Zone>(&item, "kiapi.board.types.Zone")?;
+        return Ok(PcbItem::Zone(PcbZone {
+            id: zone.id.map(|id| id.value),
+            name: zone.name,
+            zone_type: map_zone_type(zone.r#type),
+            layer_count: zone.layers.len(),
+            filled: zone.filled,
+            polygon_count: zone.filled_polygons.len(),
+        }));
+    }
+
+    if item.type_url == envelope::type_url("kiapi.board.types.Dimension") {
+        let dimension = decode_any::<board_types::Dimension>(&item, "kiapi.board.types.Dimension")?;
+        return Ok(PcbItem::Dimension(PcbDimension {
+            id: dimension.id.map(|id| id.value),
+            layer: layer_to_model(dimension.layer),
+            text: dimension.text.map(|value| value.text),
+            style_kind: dimension.dimension_style.map(|value| format!("{value:?}")),
+        }));
+    }
+
+    if item.type_url == envelope::type_url("kiapi.board.types.Group") {
+        let group = decode_any::<board_types::Group>(&item, "kiapi.board.types.Group")?;
+        return Ok(PcbItem::Group(PcbGroup {
+            id: group.id.map(|id| id.value),
+            name: group.name,
+            item_count: group.items.len(),
+        }));
+    }
+
+    Ok(PcbItem::Unknown(PcbUnknownItem {
+        type_url: item.type_url,
+        raw_len: item.value.len(),
+    }))
 }
 
 fn pad_netlist_from_footprint_items(
@@ -1544,7 +2062,10 @@ fn format_dimension_selection_detail(dimension: board_types::Dimension) -> Strin
         .map(|value| value.text.clone())
         .unwrap_or_else(|| "-".to_string());
     let style = format!("{:?}", dimension.dimension_style);
-    format!("dimension id={id} layer={layer} text={} style={style}", text)
+    format!(
+        "dimension id={id} layer={layer} text={} style={style}",
+        text
+    )
 }
 
 fn format_group_selection_detail(group: board_types::Group) -> String {
