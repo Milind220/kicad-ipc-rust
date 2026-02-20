@@ -10,6 +10,7 @@ pub mod client;
 pub mod commands;
 pub mod envelope;
 pub mod error;
+mod kicad_api_version;
 pub mod model;
 pub mod transport;
 
@@ -20,6 +21,7 @@ pub(crate) mod proto;
 
 pub use crate::client::{ClientBuilder, KiCadClient};
 pub use crate::error::KiCadError;
+pub use crate::kicad_api_version::KICAD_API_VERSION;
 pub use crate::model::board::{
     ArcStartMidEndNm, BoardEditorAppearanceSettings, BoardEnabledLayers, BoardFlipMode,
     BoardLayerClass, BoardLayerGraphicsDefault, BoardLayerInfo, BoardNet, BoardOriginKind,

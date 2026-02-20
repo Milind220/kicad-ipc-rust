@@ -4,6 +4,8 @@
 
 MIT-licensed Rust client library for the KiCad IPC API.
 
+Maintainer workflow: see `CONTRIBUTIONS.md`.
+
 ## Status
 
 Alpha. `v0.1.0` release candidate.
@@ -12,6 +14,22 @@ Alpha. `v0.1.0` release candidate.
 - Sync/blocking wrapper API: planned, not shipped yet.
 - Real-world user testing: still limited.
 - Issues and PRs welcome.
+
+## Protobuf Source
+
+This crate ships checked-in Rust protobuf output under `src/proto/generated/`.
+
+- Consumers do **not** need KiCad source checkout or git submodules.
+- Maintainers regenerate bindings from KiCad upstream via the `kicad` git submodule.
+
+Maintainer refresh flow:
+
+```bash
+git submodule update --init --recursive
+./scripts/regenerate-protos.sh
+```
+
+The regeneration tool also stamps `KICAD_API_VERSION` from the KiCad submodule git revision.
 
 ## Local Testing
 
@@ -130,7 +148,7 @@ Legend:
 
 | Item | Value |
 | --- | --- |
-| Dedicated commands in `proto/schematic/schematic_commands.proto` | None in current proto snapshot |
+| Dedicated commands in `kicad/api/proto/schematic/schematic_commands.proto` | None in current proto snapshot |
 | Coverage | n/a |
 
 ### Symbol editor
