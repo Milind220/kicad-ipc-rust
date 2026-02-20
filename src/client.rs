@@ -46,6 +46,7 @@ const CMD_REFRESH_EDITOR: &str = "kiapi.common.commands.RefreshEditor";
 const CMD_GET_OPEN_DOCUMENTS: &str = "kiapi.common.commands.GetOpenDocuments";
 const CMD_GET_NETS: &str = "kiapi.board.commands.GetNets";
 const CMD_GET_BOARD_ENABLED_LAYERS: &str = "kiapi.board.commands.GetBoardEnabledLayers";
+const CMD_SET_BOARD_ENABLED_LAYERS: &str = "kiapi.board.commands.SetBoardEnabledLayers";
 const CMD_GET_ACTIVE_LAYER: &str = "kiapi.board.commands.GetActiveLayer";
 const CMD_SET_ACTIVE_LAYER: &str = "kiapi.board.commands.SetActiveLayer";
 const CMD_GET_VISIBLE_LAYERS: &str = "kiapi.board.commands.GetVisibleLayers";
@@ -564,10 +565,28 @@ impl KiCadClient {
         let payload: board_commands::BoardEnabledLayersResponse =
             envelope::unpack_any(&response, RES_GET_BOARD_ENABLED_LAYERS)?;
 
-        Ok(BoardEnabledLayers {
-            copper_layer_count: payload.copper_layer_count,
-            layers: payload.layers.into_iter().map(layer_to_model).collect(),
-        })
+        Ok(map_board_enabled_layers_response(payload))
+    }
+
+    pub async fn set_board_enabled_layers(
+        &self,
+        copper_layer_count: u32,
+        layer_ids: Vec<i32>,
+    ) -> Result<BoardEnabledLayers, KiCadError> {
+        let board = self.current_board_document_proto().await?;
+        let command = board_commands::SetBoardEnabledLayers {
+            board: Some(board),
+            copper_layer_count,
+            layers: layer_ids,
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_SET_BOARD_ENABLED_LAYERS))
+            .await?;
+
+        let payload: board_commands::BoardEnabledLayersResponse =
+            envelope::unpack_any(&response, RES_GET_BOARD_ENABLED_LAYERS)?;
+        Ok(map_board_enabled_layers_response(payload))
     }
 
     pub async fn get_active_layer(&self) -> Result<BoardLayerInfo, KiCadError> {
@@ -1616,6 +1635,15 @@ fn layer_to_model(layer_id: i32) -> BoardLayerInfo {
         .unwrap_or_else(|_| format!("UNKNOWN_LAYER({layer_id})"));
 
     BoardLayerInfo { id: layer_id, name }
+}
+
+fn map_board_enabled_layers_response(
+    payload: board_commands::BoardEnabledLayersResponse,
+) -> BoardEnabledLayers {
+    BoardEnabledLayers {
+        copper_layer_count: payload.copper_layer_count,
+        layers: payload.layers.into_iter().map(layer_to_model).collect(),
+    }
 }
 
 fn board_origin_kind_to_proto(kind: BoardOriginKind) -> i32 {

@@ -41,9 +41,9 @@ Legend:
 | Common (base) | 6 | 4 | 67% |
 | Common editor/document | 23 | 12 | 52% |
 | Project manager | 5 | 3 | 60% |
-| Board editor (PCB) | 22 | 16 | 73% |
+| Board editor (PCB) | 22 | 17 | 77% |
 | Schematic editor (dedicated proto commands) | 0 | 0 | n/a |
-| **Total** | **56** | **35** | **63%** |
+| **Total** | **56** | **36** | **64%** |
 
 ### Common (base)
 
@@ -101,7 +101,7 @@ Legend:
 | `GetBoardStackup` | Implemented | `KiCadClient::get_board_stackup_raw`, `KiCadClient::get_board_stackup` |
 | `UpdateBoardStackup` | Not yet | - |
 | `GetBoardEnabledLayers` | Implemented | `KiCadClient::get_board_enabled_layers` |
-| `SetBoardEnabledLayers` | Not yet | - |
+| `SetBoardEnabledLayers` | Implemented | `KiCadClient::set_board_enabled_layers` |
 | `GetGraphicsDefaults` | Implemented | `KiCadClient::get_graphics_defaults_raw`, `KiCadClient::get_graphics_defaults` |
 | `GetBoardOrigin` | Implemented | `KiCadClient::get_board_origin` |
 | `SetBoardOrigin` | Implemented | `KiCadClient::set_board_origin` |

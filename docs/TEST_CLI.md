@@ -83,6 +83,12 @@ List enabled board layers:
 cargo run --bin kicad-ipc-cli -- enabled-layers
 ```
 
+Set enabled board layers:
+
+```bash
+cargo run --bin kicad-ipc-cli -- set-enabled-layers --copper-layer-count 2 --layer-id 47 --layer-id 52
+```
+
 Show active layer:
 
 ```bash
