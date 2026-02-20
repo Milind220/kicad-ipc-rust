@@ -69,6 +69,7 @@ const CMD_CHECK_PADSTACK_PRESENCE_ON_LAYERS: &str =
 const CMD_INJECT_DRC_ERROR: &str = "kiapi.board.commands.InjectDrcError";
 const CMD_GET_SELECTION: &str = "kiapi.common.commands.GetSelection";
 const CMD_ADD_TO_SELECTION: &str = "kiapi.common.commands.AddToSelection";
+const CMD_REMOVE_FROM_SELECTION: &str = "kiapi.common.commands.RemoveFromSelection";
 const CMD_CLEAR_SELECTION: &str = "kiapi.common.commands.ClearSelection";
 const CMD_BEGIN_COMMIT: &str = "kiapi.common.commands.BeginCommit";
 const CMD_END_COMMIT: &str = "kiapi.common.commands.EndCommit";
@@ -792,6 +793,43 @@ impl KiCadClient {
 
     pub async fn clear_selection(&self) -> Result<SelectionSummary, KiCadError> {
         let items = self.clear_selection_raw().await?;
+        Ok(summarize_selection(items))
+    }
+
+    pub async fn remove_from_selection_raw(
+        &self,
+        item_ids: Vec<String>,
+    ) -> Result<Vec<prost_types::Any>, KiCadError> {
+        let command = common_commands::RemoveFromSelection {
+            header: Some(self.current_board_item_header().await?),
+            items: item_ids
+                .into_iter()
+                .map(|value| common_types::Kiid { value })
+                .collect(),
+        };
+
+        let response = self
+            .send_command(envelope::pack_any(&command, CMD_REMOVE_FROM_SELECTION))
+            .await?;
+
+        match envelope::unpack_any::<common_commands::SelectionResponse>(
+            &response,
+            RES_SELECTION_RESPONSE,
+        ) {
+            Ok(payload) => Ok(payload.items),
+            Err(KiCadError::UnexpectedPayloadType {
+                expected_type_url: _,
+                actual_type_url,
+            }) if actual_type_url == envelope::type_url(RES_PROTOBUF_EMPTY) => Ok(Vec::new()),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn remove_from_selection(
+        &self,
+        item_ids: Vec<String>,
+    ) -> Result<SelectionSummary, KiCadError> {
+        let items = self.remove_from_selection_raw(item_ids).await?;
         Ok(summarize_selection(items))
     }
 

@@ -87,6 +87,9 @@ enum Command {
     AddToSelection {
         item_ids: Vec<String>,
     },
+    RemoveFromSelection {
+        item_ids: Vec<String>,
+    },
     ClearSelection,
     SelectionSummary,
     SelectionDetails,
@@ -424,6 +427,13 @@ async fn run() -> Result<(), KiCadError> {
         }
         Command::AddToSelection { item_ids } => {
             let summary = client.add_to_selection(item_ids).await?;
+            println!("selection_total={}", summary.total_items);
+            for entry in summary.type_url_counts {
+                println!("type_url={} count={}", entry.type_url, entry.count);
+            }
+        }
+        Command::RemoveFromSelection { item_ids } => {
+            let summary = client.remove_from_selection(item_ids).await?;
             println!("selection_total={}", summary.total_items);
             for entry in summary.type_url_counts {
                 println!("type_url={} count={}", entry.type_url, entry.count);
@@ -1191,6 +1201,10 @@ fn parse_args_from(mut args: Vec<String>) -> Result<(CliConfig, Command), KiCadE
             let item_ids = parse_item_ids(&args[1..], "add-to-selection")?;
             Command::AddToSelection { item_ids }
         }
+        "remove-from-selection" => {
+            let item_ids = parse_item_ids(&args[1..], "remove-from-selection")?;
+            Command::RemoveFromSelection { item_ids }
+        }
         "clear-selection" => Command::ClearSelection,
         "selection-summary" => Command::SelectionSummary,
         "selection-details" => Command::SelectionDetails,
@@ -1657,7 +1671,7 @@ fn default_config() -> CliConfig {
 
 fn print_help() {
     println!(
-        "kicad-ipc-cli\n\nUSAGE:\n  cargo run --bin kicad-ipc-cli -- [--socket URI] [--token TOKEN] [--client-name NAME] [--timeout-ms N] <command> [command options]\n\nCOMMANDS:\n  ping                         Check IPC connectivity\n  version                      Fetch KiCad version\n  open-docs [--type <type>]    List open docs (default type: pcb)\n  project-path                 Get current project path from open PCB docs\n  board-open                   Exit non-zero if no PCB doc is open\n  net-classes                  List project netclass definitions\n  text-variables               List text variables for current board document\n  expand-text-variables        Expand variables in provided text values\n                               Options: --text <value> (repeatable)\n  text-extents                 Measure text bounding box\n                               Options: --text <value>\n  text-as-shapes               Convert text to rendered shapes\n                               Options: --text <value> (repeatable)\n  nets                         List board nets (requires one open PCB)\n  netlist-pads                 Emit pad-level netlist data (with footprint context)\n  items-by-id --id <uuid> ...  Show parsed details for specific item IDs\n  item-bbox --id <uuid> ...    Show bounding boxes for item IDs\n  hit-test --id <uuid> --x-nm <x> --y-nm <y> [--tolerance-nm <n>]\n                               Hit-test one item at a point\n  types-pcb                    List PCB KiCad object type IDs from proto enum\n  items-raw --type-id <id> ... Dump raw Any payloads for requested item type IDs\n  items-raw-all-pcb [--debug]  Dump all PCB item payloads across all PCB object types\n  pad-shape-polygon --pad-id <uuid> ... --layer-id <i32> [--debug]\n                               Dump pad polygons on a target layer\n  padstack-presence --item-id <uuid> ... --layer-id <i32> ... [--debug]\n                               Check padstack shape presence matrix across layers\n  title-block                  Show title block fields\n  board-as-string              Dump board as KiCad s-expression text\n  selection-as-string          Dump current selection as KiCad s-expression text\n  stackup                      Show typed board stackup\n  graphics-defaults            Show typed graphics defaults\n  appearance                   Show typed editor appearance settings\n  set-appearance --inactive-layer-display <normal|dimmed|hidden>\n                 --net-color-display <all|ratsnest|off>\n                 --board-flip <normal|flipped-x>\n                 --ratsnest-display <all-layers|visible-layers>\n                               Set editor appearance settings\n  inject-drc-error --severity <s> --message <text> [--x-nm <i64> --y-nm <i64>] [--item-id <uuid> ...]\n                               Inject a DRC marker (severity: warning|error|exclusion|ignore|info|action|debug|undefined)\n  refill-zones [--zone-id <uuid> ...]\n                               Refill all zones or a provided subset\n  netclass                     Show typed netclass map for current board nets\n  proto-coverage-board-read    Print board-read command coverage vs proto\n  board-read-report [--out P]  Write markdown board reconstruction report\n  enabled-layers               List enabled board layers\n  set-enabled-layers --copper-layer-count <u32> [--layer-id <i32> ...]\n                               Set enabled board layer set\n  active-layer                 Show active board layer\n  set-active-layer --layer-id <i32>\n                               Set active board layer\n  visible-layers               Show currently visible board layers\n  set-visible-layers --layer-id <i32> ...\n                               Set visible board layers\n  board-origin [--type <t>]    Show board origin (`grid` default, or `drill`)\n  set-board-origin --type <t> --x-nm <i64> --y-nm <i64>\n                               Set board origin (`grid` or `drill`)\n  refresh-editor [--frame <f>] Refresh a specific editor frame (default: pcb)\n  begin-commit                 Start staged commit and print commit ID\n  end-commit --id <uuid> [--action <commit|drop>] [--message <text>]\n                               End staged commit with commit/drop action\n  add-to-selection --id <uuid> ...\n                               Add items to current selection\n  clear-selection              Clear current item selection\n  selection-summary            Show current selection item type counts\n  selection-details            Show parsed details for selected items\n  selection-raw                Show raw Any payload bytes for selected items\n  smoke                        ping + version + board-open summary\n  help                         Show help\n\nTYPES:\n  schematic | symbol | pcb | footprint | drawing-sheet | project\n"
+        "kicad-ipc-cli\n\nUSAGE:\n  cargo run --bin kicad-ipc-cli -- [--socket URI] [--token TOKEN] [--client-name NAME] [--timeout-ms N] <command> [command options]\n\nCOMMANDS:\n  ping                         Check IPC connectivity\n  version                      Fetch KiCad version\n  open-docs [--type <type>]    List open docs (default type: pcb)\n  project-path                 Get current project path from open PCB docs\n  board-open                   Exit non-zero if no PCB doc is open\n  net-classes                  List project netclass definitions\n  text-variables               List text variables for current board document\n  expand-text-variables        Expand variables in provided text values\n                               Options: --text <value> (repeatable)\n  text-extents                 Measure text bounding box\n                               Options: --text <value>\n  text-as-shapes               Convert text to rendered shapes\n                               Options: --text <value> (repeatable)\n  nets                         List board nets (requires one open PCB)\n  netlist-pads                 Emit pad-level netlist data (with footprint context)\n  items-by-id --id <uuid> ...  Show parsed details for specific item IDs\n  item-bbox --id <uuid> ...    Show bounding boxes for item IDs\n  hit-test --id <uuid> --x-nm <x> --y-nm <y> [--tolerance-nm <n>]\n                               Hit-test one item at a point\n  types-pcb                    List PCB KiCad object type IDs from proto enum\n  items-raw --type-id <id> ... Dump raw Any payloads for requested item type IDs\n  items-raw-all-pcb [--debug]  Dump all PCB item payloads across all PCB object types\n  pad-shape-polygon --pad-id <uuid> ... --layer-id <i32> [--debug]\n                               Dump pad polygons on a target layer\n  padstack-presence --item-id <uuid> ... --layer-id <i32> ... [--debug]\n                               Check padstack shape presence matrix across layers\n  title-block                  Show title block fields\n  board-as-string              Dump board as KiCad s-expression text\n  selection-as-string          Dump current selection as KiCad s-expression text\n  stackup                      Show typed board stackup\n  graphics-defaults            Show typed graphics defaults\n  appearance                   Show typed editor appearance settings\n  set-appearance --inactive-layer-display <normal|dimmed|hidden>\n                 --net-color-display <all|ratsnest|off>\n                 --board-flip <normal|flipped-x>\n                 --ratsnest-display <all-layers|visible-layers>\n                               Set editor appearance settings\n  inject-drc-error --severity <s> --message <text> [--x-nm <i64> --y-nm <i64>] [--item-id <uuid> ...]\n                               Inject a DRC marker (severity: warning|error|exclusion|ignore|info|action|debug|undefined)\n  refill-zones [--zone-id <uuid> ...]\n                               Refill all zones or a provided subset\n  netclass                     Show typed netclass map for current board nets\n  proto-coverage-board-read    Print board-read command coverage vs proto\n  board-read-report [--out P]  Write markdown board reconstruction report\n  enabled-layers               List enabled board layers\n  set-enabled-layers --copper-layer-count <u32> [--layer-id <i32> ...]\n                               Set enabled board layer set\n  active-layer                 Show active board layer\n  set-active-layer --layer-id <i32>\n                               Set active board layer\n  visible-layers               Show currently visible board layers\n  set-visible-layers --layer-id <i32> ...\n                               Set visible board layers\n  board-origin [--type <t>]    Show board origin (`grid` default, or `drill`)\n  set-board-origin --type <t> --x-nm <i64> --y-nm <i64>\n                               Set board origin (`grid` or `drill`)\n  refresh-editor [--frame <f>] Refresh a specific editor frame (default: pcb)\n  begin-commit                 Start staged commit and print commit ID\n  end-commit --id <uuid> [--action <commit|drop>] [--message <text>]\n                               End staged commit with commit/drop action\n  add-to-selection --id <uuid> ...\n                               Add items to current selection\n  remove-from-selection --id <uuid> ...\n                               Remove items from current selection\n  clear-selection              Clear current item selection\n  selection-summary            Show current selection item type counts\n  selection-details            Show parsed details for selected items\n  selection-raw                Show raw Any payload bytes for selected items\n  smoke                        ping + version + board-open summary\n  help                         Show help\n\nTYPES:\n  schematic | symbol | pcb | footprint | drawing-sheet | project\n"
     );
 }
 
@@ -2292,6 +2306,25 @@ mod tests {
 
         match command {
             Command::AddToSelection { item_ids } => {
+                assert_eq!(item_ids, vec!["zone-1".to_string(), "zone-2".to_string()]);
+            }
+            other => panic!("unexpected command variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_args_parses_remove_from_selection() {
+        let (_, command) = parse_args_from(vec![
+            "remove-from-selection".to_string(),
+            "--id".to_string(),
+            "zone-1".to_string(),
+            "--id".to_string(),
+            "zone-2".to_string(),
+        ])
+        .expect("remove-from-selection args should parse");
+
+        match command {
+            Command::RemoveFromSelection { item_ids } => {
                 assert_eq!(item_ids, vec!["zone-1".to_string(), "zone-2".to_string()]);
             }
             other => panic!("unexpected command variant: {other:?}"),

@@ -175,6 +175,12 @@ Add items to current selection:
 cargo run --bin kicad-ipc-cli -- add-to-selection --id <uuid> --id <uuid>
 ```
 
+Remove items from current selection:
+
+```bash
+cargo run --bin kicad-ipc-cli -- remove-from-selection --id <uuid> --id <uuid>
+```
+
 Clear current selection:
 
 ```bash
