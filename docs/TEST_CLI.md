@@ -163,6 +163,12 @@ End a staged commit:
 cargo run --bin kicad-ipc-cli -- --client-name write-test end-commit --id <commit-id> --action drop --message "cli test cleanup"
 ```
 
+Save current board document:
+
+```bash
+cargo run --bin kicad-ipc-cli -- save-doc
+```
+
 Show summary of current PCB selection by item type:
 
 ```bash
