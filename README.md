@@ -21,6 +21,7 @@ This crate ships checked-in Rust protobuf output under `src/proto/generated/`.
 
 - Consumers do **not** need KiCad source checkout or git submodules.
 - Maintainers regenerate bindings from KiCad upstream via the `kicad` git submodule.
+- Current proto pin: KiCad `10.0.0-rc1.1` (`KICAD_API_VERSION = 10.0.0-rc1.1-0-gc7c84125`).
 
 Maintainer refresh flow:
 
