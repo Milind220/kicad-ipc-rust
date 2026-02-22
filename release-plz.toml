@@ -3,3 +3,4 @@ release_always = true
 git_tag_enable = true
 git_release_enable = true
 publish = true
+release_commits = '^(feat|fix|perf|refactor|revert|build)(\([^)]+\))?(!)?:'
