@@ -1,0 +1,14 @@
+            - name: release-plz
+  # You may pin to the exact commit or the version.
+  # uses: release-plz/action@3e097c27f0fb2124b5addd6f2dd463884a3938ec
+  uses: release-plz/action@v0.5.2
+  with:
+    # The release-plz command to run. Accepted values: `release-pr`, `release`. If unspecified, this action runs both these commands.
+    command: # optional
+    # Registry where the packages are stored. The registry name needs to be present in the Cargo config. If unspecified, crates.io is used.
+    registry: # optional
+    # Path to the Cargo.toml of the project you want to update. If not provided, release-plz will use the Cargo.toml of the root directory. Both Cargo workspaces and single packages are supported.
+    project_manifest: # optional
+    # Release-plz version to use. It must be an existing git tag name. For example `release-plz-v0.2.45`. (Default: `latest`).
+    version: # optional, default is release-plz-v0.3.3
+          
