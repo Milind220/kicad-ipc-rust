@@ -60,6 +60,7 @@ enum Command {
         text: Vec<String>,
     },
     Nets,
+    Vias,
     EnabledLayers,
     SetEnabledLayers {
         copper_layer_count: u32,
@@ -398,6 +399,46 @@ fn run() -> Result<(), KiCadError> {
                 for net in nets {
                     println!("code={} name={}", net.code, net.name);
                 }
+            }
+        }
+        Command::Vias => {
+            let vias = client.get_vias()?;
+            println!("via_count={}", vias.len());
+            for via in vias {
+                let net = via
+                    .net
+                    .as_ref()
+                    .map(|row| format!("{}:{}", row.code, row.name))
+                    .unwrap_or_else(|| "-".to_string());
+                let pad_layers = via
+                    .layers
+                    .as_ref()
+                    .map(|row| format_layer_names_for_cli(&row.padstack_layers))
+                    .unwrap_or_else(|| "-".to_string());
+                let drill_start = via
+                    .layers
+                    .as_ref()
+                    .and_then(|row| row.drill_start_layer.as_ref())
+                    .map(|layer| layer.name.as_str())
+                    .unwrap_or("-");
+                let drill_end = via
+                    .layers
+                    .as_ref()
+                    .and_then(|row| row.drill_end_layer.as_ref())
+                    .map(|layer| layer.name.as_str())
+                    .unwrap_or("-");
+                println!(
+                    "id={} pos_nm={} type={:?} net={} pad_layers={} drill_span={}->{}",
+                    via.id.as_deref().unwrap_or("-"),
+                    via.position_nm
+                        .map(|point| format!("{},{}", point.x_nm, point.y_nm))
+                        .unwrap_or_else(|| "-".to_string()),
+                    via.via_type,
+                    net,
+                    pad_layers,
+                    drill_start,
+                    drill_end
+                );
             }
         }
         Command::EnabledLayers => {
@@ -1108,6 +1149,7 @@ fn parse_args_from(mut args: Vec<String>) -> Result<(CliConfig, Command), KiCadE
             Command::TextAsShapes { text }
         }
         "nets" => Command::Nets,
+        "vias" => Command::Vias,
         "enabled-layers" => Command::EnabledLayers,
         "set-enabled-layers" => {
             let mut copper_layer_count = None;
@@ -2083,6 +2125,7 @@ COMMANDS:
   text-as-shapes               Convert text to rendered shapes
                                Options: --text <value> (repeatable)
   nets                         List board nets (requires one open PCB)
+  vias                         List typed vias with via type + layer span
   netlist-pads                 Emit pad-level netlist data (with footprint context)
   items-by-id --id <uuid> ...  Show parsed details for specific item IDs
   item-bbox --id <uuid> ...    Show bounding boxes for item IDs
@@ -2655,6 +2698,18 @@ fn polygon_geometry_summary(polygon: &kicad_ipc_rs::PolygonWithHolesNm) -> Polyg
     summary
 }
 
+fn format_layer_names_for_cli(layers: &[kicad_ipc_rs::BoardLayerInfo]) -> String {
+    if layers.is_empty() {
+        return "-".to_string();
+    }
+
+    layers
+        .iter()
+        .map(|layer| layer.name.as_str())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 fn parse_item_ids(args: &[String], command_name: &str) -> Result<Vec<String>, KiCadError> {
     let mut item_ids = Vec::new();
     let mut i = 0;
@@ -2846,6 +2901,12 @@ mod tests {
             Command::SetActiveLayer { layer_id } => assert_eq!(layer_id, 31),
             other => panic!("unexpected command variant: {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_args_parses_vias() {
+        let (_, command) = parse_args_from(vec!["vias".to_string()]).expect("vias should parse");
+        assert!(matches!(command, Command::Vias));
     }
 
     #[test]

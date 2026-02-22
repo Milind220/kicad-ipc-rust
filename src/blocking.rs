@@ -441,6 +441,8 @@ impl KiCadClientBlocking {
         fn remove_from_selection_raw(&self, item_ids: Vec<String>) -> Result<Vec<Any>, KiCadError>;
         fn remove_from_selection(&self, item_ids: Vec<String>) -> Result<SelectionSummary, KiCadError>;
         fn get_pad_netlist(&self) -> Result<Vec<PadNetEntry>, KiCadError>;
+        fn get_vias_raw(&self) -> Result<Vec<Any>, KiCadError>;
+        fn get_vias(&self) -> Result<Vec<PcbVia>, KiCadError>;
         fn get_items_raw_by_type_codes(&self, type_codes: Vec<i32>) -> Result<Vec<Any>, KiCadError>;
         fn get_items_details_by_type_codes(&self, type_codes: Vec<i32>) -> Result<Vec<SelectionItemDetail>, KiCadError>;
         fn get_items_by_type_codes(&self, type_codes: Vec<i32>) -> Result<Vec<PcbItem>, KiCadError>;

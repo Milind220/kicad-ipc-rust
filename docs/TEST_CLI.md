@@ -61,6 +61,12 @@ List nets:
 cargo run --features blocking --bin kicad-ipc-cli -- nets
 ```
 
+List vias with typed via kind and layer span:
+
+```bash
+cargo run --features blocking --bin kicad-ipc-cli -- vias
+```
+
 List project net classes:
 
 ```bash

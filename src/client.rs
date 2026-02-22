@@ -13,9 +13,9 @@ use crate::model::board::{
     NetClassForNetEntry, NetClassInfo, NetClassType, NetColorDisplayMode, PadNetEntry,
     PadShapeAsPolygonEntry, PadstackPresenceEntry, PadstackPresenceState, PcbArc,
     PcbBoardGraphicShape, PcbBoardText, PcbBoardTextBox, PcbDimension, PcbField, PcbFootprint,
-    PcbGroup, PcbItem, PcbPad, PcbPadType, PcbTrack, PcbUnknownItem, PcbVia, PcbViaType, PcbZone,
-    PcbZoneType, PolyLineNm, PolyLineNodeGeometryNm, PolygonWithHolesNm, RatsnestDisplayMode,
-    Vector2Nm,
+    PcbGroup, PcbItem, PcbPad, PcbPadType, PcbTrack, PcbUnknownItem, PcbVia, PcbViaLayers,
+    PcbViaType, PcbZone, PcbZoneType, PolyLineNm, PolyLineNodeGeometryNm, PolygonWithHolesNm,
+    RatsnestDisplayMode, Vector2Nm,
 };
 use crate::model::common::{
     CommitAction, CommitSession, DocumentSpecifier, DocumentType, EditorFrameType, ItemBoundingBox,
@@ -1134,6 +1134,24 @@ impl KiCadClient {
             .get_items_raw(vec![common_types::KiCadObjectType::KotPcbFootprint as i32])
             .await?;
         pad_netlist_from_footprint_items(footprint_items)
+    }
+
+    pub async fn get_vias_raw(&self) -> Result<Vec<prost_types::Any>, KiCadError> {
+        self.get_items_raw(vec![common_types::KiCadObjectType::KotPcbVia as i32])
+            .await
+    }
+
+    pub async fn get_vias(&self) -> Result<Vec<PcbVia>, KiCadError> {
+        let items = self
+            .get_items_by_type_codes(vec![common_types::KiCadObjectType::KotPcbVia as i32])
+            .await?;
+        Ok(items
+            .into_iter()
+            .filter_map(|item| match item {
+                PcbItem::Via(via) => Some(via),
+                _ => None,
+            })
+            .collect())
     }
 
     pub fn pcb_object_type_codes() -> &'static [PcbObjectTypeCode] {
@@ -2962,6 +2980,25 @@ fn map_via_type(value: i32) -> PcbViaType {
     }
 }
 
+fn map_via_layers(pad_stack: Option<board_types::PadStack>) -> Option<PcbViaLayers> {
+    let pad_stack = pad_stack?;
+
+    let (drill_start_layer, drill_end_layer) = if let Some(drill) = pad_stack.drill {
+        (
+            Some(layer_to_model(drill.start_layer)),
+            Some(layer_to_model(drill.end_layer)),
+        )
+    } else {
+        (None, None)
+    };
+
+    Some(PcbViaLayers {
+        padstack_layers: pad_stack.layers.into_iter().map(layer_to_model).collect(),
+        drill_start_layer,
+        drill_end_layer,
+    })
+}
+
 fn map_pad_type(value: i32) -> PcbPadType {
     match board_types::PadType::try_from(value) {
         Ok(board_types::PadType::PtPth) => PcbPadType::Pth,
@@ -3018,6 +3055,7 @@ fn decode_pcb_item(item: prost_types::Any) -> Result<PcbItem, KiCadError> {
             id: via.id.map(|id| id.value),
             position_nm: via.position.map(map_vector2_nm),
             via_type: map_via_type(via.r#type),
+            layers: map_via_layers(via.pad_stack),
             net: map_optional_net(via.net),
         }));
     }
@@ -3338,7 +3376,37 @@ fn format_via_selection_detail(via: board_types::Via) -> String {
     let via_type = board_types::ViaType::try_from(via.r#type)
         .map(|value| value.as_str_name().to_string())
         .unwrap_or_else(|_| format!("UNKNOWN({})", via.r#type));
-    format!("via id={id} pos_nm={position} type={via_type} net={net}")
+    let layers = map_via_layers(via.pad_stack);
+    let pad_layers = layers
+        .as_ref()
+        .map(|row| format_layer_names(&row.padstack_layers))
+        .unwrap_or_else(|| "-".to_string());
+    let drill_start = layers
+        .as_ref()
+        .and_then(|row| row.drill_start_layer.as_ref())
+        .map(|layer| layer.name.as_str())
+        .unwrap_or("-");
+    let drill_end = layers
+        .as_ref()
+        .and_then(|row| row.drill_end_layer.as_ref())
+        .map(|layer| layer.name.as_str())
+        .unwrap_or("-");
+
+    format!(
+        "via id={id} pos_nm={position} type={via_type} net={net} pad_layers={pad_layers} drill_span={drill_start}->{drill_end}"
+    )
+}
+
+fn format_layer_names(layers: &[BoardLayerInfo]) -> String {
+    if layers.is_empty() {
+        return "-".to_string();
+    }
+
+    layers
+        .iter()
+        .map(|layer| layer.name.as_str())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn format_footprint_selection_detail(footprint: board_types::FootprintInstance) -> String {
@@ -3639,18 +3707,19 @@ fn default_client_name() -> String {
 mod tests {
     use super::{
         any_to_pretty_debug, board_editor_appearance_settings_to_proto, board_stackup_to_proto,
-        commit_action_to_proto, drc_severity_to_proto, ensure_item_deletion_status_ok,
-        ensure_item_request_ok, ensure_item_status_ok, layer_to_model, map_board_stackup,
-        map_commit_session, map_hit_test_result, map_item_bounding_boxes, map_merge_mode_to_proto,
-        map_polygon_with_holes, map_run_action_status, model_document_to_proto,
-        normalize_socket_uri, pad_netlist_from_footprint_items, response_payload_as_any,
-        select_single_board_document, select_single_project_path, selection_item_detail,
-        summarize_item_details, summarize_selection, text_horizontal_alignment_to_proto,
-        text_spec_to_proto, PCB_OBJECT_TYPES,
+        commit_action_to_proto, decode_pcb_item, drc_severity_to_proto,
+        ensure_item_deletion_status_ok, ensure_item_request_ok, ensure_item_status_ok,
+        layer_to_model, map_board_stackup, map_commit_session, map_hit_test_result,
+        map_item_bounding_boxes, map_merge_mode_to_proto, map_polygon_with_holes,
+        map_run_action_status, model_document_to_proto, normalize_socket_uri,
+        pad_netlist_from_footprint_items, response_payload_as_any, select_single_board_document,
+        select_single_project_path, selection_item_detail, summarize_item_details,
+        summarize_selection, text_horizontal_alignment_to_proto, text_spec_to_proto,
+        PCB_OBJECT_TYPES,
     };
     use crate::error::KiCadError;
     use crate::model::board::{
-        BoardLayerInfo, BoardStackup, BoardStackupLayer, BoardStackupLayerType,
+        BoardLayerInfo, BoardStackup, BoardStackupLayer, BoardStackupLayerType, PcbItem, PcbViaType,
     };
     use crate::model::common::{
         CommitAction, DocumentSpecifier, DocumentType, ProjectInfo, TextAttributesSpec,
@@ -4079,6 +4148,107 @@ mod tests {
         assert!(detail.contains("track id=track-id"));
         assert!(detail.contains("layer=BL_F_Cu"));
         assert!(detail.contains("net=12:GND"));
+    }
+
+    #[test]
+    fn decode_pcb_item_maps_via_layers() {
+        let via = crate::proto::kiapi::board::types::Via {
+            id: Some(crate::proto::kiapi::common::types::Kiid {
+                value: "via-id".to_string(),
+            }),
+            position: Some(crate::proto::kiapi::common::types::Vector2 {
+                x_nm: 100,
+                y_nm: 200,
+            }),
+            pad_stack: Some(crate::proto::kiapi::board::types::PadStack {
+                layers: vec![
+                    crate::proto::kiapi::board::types::BoardLayer::BlFCu as i32,
+                    crate::proto::kiapi::board::types::BoardLayer::BlBCu as i32,
+                ],
+                drill: Some(crate::proto::kiapi::board::types::DrillProperties {
+                    start_layer: crate::proto::kiapi::board::types::BoardLayer::BlFCu as i32,
+                    end_layer: crate::proto::kiapi::board::types::BoardLayer::BlBCu as i32,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            locked: 0,
+            net: Some(crate::proto::kiapi::board::types::Net {
+                code: Some(crate::proto::kiapi::board::types::NetCode { value: 7 }),
+                name: "VCC".to_string(),
+            }),
+            r#type: crate::proto::kiapi::board::types::ViaType::VtBlindBuried as i32,
+        };
+
+        let item = prost_types::Any {
+            type_url: super::envelope::type_url("kiapi.board.types.Via"),
+            value: via.encode_to_vec(),
+        };
+
+        let parsed = decode_pcb_item(item).expect("via payload should decode");
+        match parsed {
+            PcbItem::Via(via) => {
+                assert_eq!(via.id.as_deref(), Some("via-id"));
+                assert_eq!(via.via_type, PcbViaType::BlindBuried);
+                let layers = via.layers.expect("via layers should decode");
+                assert_eq!(layers.padstack_layers.len(), 2);
+                assert_eq!(layers.padstack_layers[0].name, "BL_F_Cu");
+                assert_eq!(layers.padstack_layers[1].name, "BL_B_Cu");
+                assert_eq!(
+                    layers
+                        .drill_start_layer
+                        .as_ref()
+                        .map(|layer| layer.name.as_str()),
+                    Some("BL_F_Cu")
+                );
+                assert_eq!(
+                    layers
+                        .drill_end_layer
+                        .as_ref()
+                        .map(|layer| layer.name.as_str()),
+                    Some("BL_B_Cu")
+                );
+            }
+            other => panic!("expected via item, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn selection_item_detail_reports_via_layers() {
+        let via = crate::proto::kiapi::board::types::Via {
+            id: Some(crate::proto::kiapi::common::types::Kiid {
+                value: "via-id".to_string(),
+            }),
+            position: Some(crate::proto::kiapi::common::types::Vector2 {
+                x_nm: 100,
+                y_nm: 200,
+            }),
+            pad_stack: Some(crate::proto::kiapi::board::types::PadStack {
+                layers: vec![
+                    crate::proto::kiapi::board::types::BoardLayer::BlFCu as i32,
+                    crate::proto::kiapi::board::types::BoardLayer::BlBCu as i32,
+                ],
+                drill: Some(crate::proto::kiapi::board::types::DrillProperties {
+                    start_layer: crate::proto::kiapi::board::types::BoardLayer::BlFCu as i32,
+                    end_layer: crate::proto::kiapi::board::types::BoardLayer::BlBCu as i32,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+            locked: 0,
+            net: None,
+            r#type: crate::proto::kiapi::board::types::ViaType::VtThrough as i32,
+        };
+
+        let item = prost_types::Any {
+            type_url: super::envelope::type_url("kiapi.board.types.Via"),
+            value: via.encode_to_vec(),
+        };
+
+        let detail = selection_item_detail(&item).expect("via detail should decode");
+        assert!(detail.contains("type=VT_THROUGH"));
+        assert!(detail.contains("pad_layers=BL_F_Cu,BL_B_Cu"));
+        assert!(detail.contains("drill_span=BL_F_Cu->BL_B_Cu"));
     }
 
     #[test]

@@ -326,6 +326,13 @@ pub enum PcbViaType {
     Unknown(i32),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PcbViaLayers {
+    pub padstack_layers: Vec<BoardLayerInfo>,
+    pub drill_start_layer: Option<BoardLayerInfo>,
+    pub drill_end_layer: Option<BoardLayerInfo>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PcbPadType {
     Pth,
@@ -370,6 +377,7 @@ pub struct PcbVia {
     pub id: Option<String>,
     pub position_nm: Option<Vector2Nm>,
     pub via_type: PcbViaType,
+    pub layers: Option<PcbViaLayers>,
     pub net: Option<BoardNet>,
 }
 
