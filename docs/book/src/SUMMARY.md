@@ -5,4 +5,4 @@
 - [Usage Patterns](usage-patterns.md)
 - [Examples](examples.md)
 - [Validation and Testing](validation.md)
-- [API Reference (docs.rs)](https://docs.rs/kicad-ipc-rs)
+- [API Reference](api-reference.md)
