@@ -15,6 +15,15 @@ Alpha. `v0.3.0` released.
 - Real-world user testing: still limited.
 - Issues and PRs welcome.
 
+## Guide Site (mdBook)
+
+Book-style guide source lives under `docs/book/` and is deployed via GitHub Pages:
+
+- Source: `docs/book/src/`
+- Build config: `docs/book/book.toml`
+- CI workflow: `.github/workflows/mdbook.yml`
+- Published URL: `https://milind220.github.io/kicad-ipc-rs/`
+
 ## Usage
 
 ### Async API (Default)

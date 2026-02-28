@@ -1,0 +1,13 @@
+[book]
+authors = ["Milind Sharma"]
+language = "en"
+src = "src"
+title = "KiCad IPC RS"
+
+[build]
+build-dir = "../../book"
+
+[output.html]
+default-theme = "light"
+git-repository-url = "https://github.com/Milind220/kicad-ipc-rs"
+site-url = "/kicad-ipc-rs/"
