@@ -8,7 +8,7 @@ Maintainer workflow: see `CONTRIBUTIONS.md`.
 
 ## Status
 
-Alpha. `v0.1.1` released.
+Alpha. `v0.3.0` released.
 
 - Async API (default): implemented and usable.
 - Sync/blocking wrapper API (`feature = "blocking"`): implemented with full async parity.
@@ -23,7 +23,7 @@ Alpha. `v0.1.1` released.
 
 ```toml
 [dependencies]
-kicad-ipc-rs = "0.1.1"
+kicad-ipc-rs = "0.3.0"
 tokio = { version = "1", features = ["macros", "rt"] }
 ```
 
@@ -48,7 +48,7 @@ Enable the `blocking` feature and use `KiCadClientBlocking` for synchronous call
 
 ```toml
 [dependencies]
-kicad-ipc-rs = { version = "0.1.1", features = ["blocking"] }
+kicad-ipc-rs = { version = "0.3.0", features = ["blocking"] }
 ```
 
 ```rust
