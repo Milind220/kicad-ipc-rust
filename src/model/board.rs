@@ -1,26 +1,38 @@
 use std::str::FromStr;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// KiCad net descriptor.
 pub struct BoardNet {
+    /// Numeric net code.
     pub code: i32,
+    /// Net name.
     pub name: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Board layer descriptor.
 pub struct BoardLayerInfo {
+    /// KiCad layer id.
     pub id: i32,
+    /// Human-readable layer name.
     pub name: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Enabled layer set for a board.
 pub struct BoardEnabledLayers {
+    /// Number of copper layers configured in the board stack.
     pub copper_layer_count: u32,
+    /// Enabled board layers.
     pub layers: Vec<BoardLayerInfo>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Board origin kind.
 pub enum BoardOriginKind {
+    /// Grid origin.
     Grid,
+    /// Drill/place origin.
     Drill,
 }
 
@@ -48,43 +60,66 @@ impl std::fmt::Display for BoardOriginKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// 2D coordinate in nanometer units.
 pub struct Vector2Nm {
+    /// X coordinate in nm.
     pub x_nm: i64,
+    /// Y coordinate in nm.
     pub y_nm: i64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Pad-to-net lookup row derived from footprint items.
 pub struct PadNetEntry {
+    /// Footprint reference (e.g. `U1`) when available.
     pub footprint_reference: Option<String>,
+    /// Footprint id when available.
     pub footprint_id: Option<String>,
+    /// Pad item id when available.
     pub pad_id: Option<String>,
+    /// Pad number/text as shown in KiCad.
     pub pad_number: String,
+    /// Net code when connected.
     pub net_code: Option<i32>,
+    /// Net name when connected.
     pub net_name: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Arc geometry in nanometer units.
 pub struct ArcStartMidEndNm {
+    /// Arc start point.
     pub start: Vector2Nm,
+    /// Arc midpoint.
     pub mid: Vector2Nm,
+    /// Arc end point.
     pub end: Vector2Nm,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Polyline node geometry.
 pub enum PolyLineNodeGeometryNm {
+    /// Straight segment point.
     Point(Vector2Nm),
+    /// Arc segment node.
     Arc(ArcStartMidEndNm),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Polyline geometry.
 pub struct PolyLineNm {
+    /// Ordered geometry nodes.
     pub nodes: Vec<PolyLineNodeGeometryNm>,
+    /// Whether last node closes back to first.
     pub closed: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Polygon with optional interior holes.
 pub struct PolygonWithHolesNm {
+    /// Outer outline polygon.
     pub outline: Option<PolyLineNm>,
+    /// Interior holes.
     pub holes: Vec<PolyLineNm>,
 }
 
