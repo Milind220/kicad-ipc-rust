@@ -5,21 +5,34 @@ use crate::model::board::{ColorRgba, PolygonWithHolesNm, Vector2Nm};
 use crate::proto::kiapi::common::types as common_types;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// KiCad semantic version returned by `GetVersion`.
 pub struct VersionInfo {
+    /// Major version component.
     pub major: u32,
+    /// Minor version component.
     pub minor: u32,
+    /// Patch version component.
     pub patch: u32,
+    /// Full KiCad version string (includes prerelease/build details).
     pub full_version: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// KiCad top-level frame/editor targets used by API commands.
 pub enum EditorFrameType {
+    /// KiCad project manager frame.
     ProjectManager,
+    /// Schematic editor frame.
     SchematicEditor,
+    /// PCB editor frame.
     PcbEditor,
+    /// Spice simulator frame.
     SpiceSimulator,
+    /// Symbol editor frame.
     SymbolEditor,
+    /// Footprint editor frame.
     FootprintEditor,
+    /// Drawing-sheet editor frame.
     DrawingSheetEditor,
 }
 
@@ -72,12 +85,19 @@ impl FromStr for EditorFrameType {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// KiCad document type selector used by document-scoped APIs.
 pub enum DocumentType {
+    /// Schematic document.
     Schematic,
+    /// Symbol document.
     Symbol,
+    /// PCB document.
     Pcb,
+    /// Footprint document.
     Footprint,
+    /// Drawing-sheet document.
     DrawingSheet,
+    /// Project-level document.
     Project,
 }
 
@@ -141,59 +161,89 @@ impl FromStr for DocumentType {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Minimal project information attached to open-document responses.
 pub struct ProjectInfo {
+    /// Project display name, if provided by KiCad.
     pub name: Option<String>,
+    /// Project filesystem path, if available.
     pub path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Descriptor for an open KiCad document.
 pub struct DocumentSpecifier {
+    /// KiCad document type.
     pub document_type: DocumentType,
+    /// Board filename when relevant.
     pub board_filename: Option<String>,
+    /// Owning project metadata.
     pub project: ProjectInfo,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Count of selected items for a specific protobuf type URL.
 pub struct SelectionTypeCount {
+    /// Protobuf type URL for the selected item type.
     pub type_url: String,
+    /// Number of selected items of this type.
     pub count: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Summary of current selection composition.
 pub struct SelectionSummary {
+    /// Total selected item count.
     pub total_items: usize,
+    /// Per-type counts by protobuf type URL.
     pub type_url_counts: Vec<SelectionTypeCount>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Human/debug-friendly selection entry detail.
 pub struct SelectionItemDetail {
+    /// Protobuf type URL.
     pub type_url: String,
+    /// Decoded/debug string detail.
     pub detail: String,
+    /// Raw payload length in bytes.
     pub raw_len: usize,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Opaque commit session identifier returned by `begin_commit`.
 pub struct CommitSession {
+    /// KiCad commit session id.
     pub id: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Final action to apply when ending a commit session.
 pub enum CommitAction {
+    /// Persist commit changes.
     Commit,
+    /// Discard commit changes.
     Drop,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Status result returned by `run_action`.
 pub enum RunActionStatus {
+    /// Action succeeded.
     Ok,
+    /// Action name or payload was invalid.
     Invalid,
+    /// Target editor frame was not open.
     FrameNotOpen,
+    /// Unrecognized status code from KiCad.
     Unknown(i32),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Merge strategy for map-like update APIs.
 pub enum MapMergeMode {
+    /// Merge provided entries into existing map.
     Merge,
+    /// Replace existing map with provided entries.
     Replace,
 }
 
@@ -244,11 +294,17 @@ impl FromStr for CommitAction {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+/// Title block fields from the active document.
 pub struct TitleBlockInfo {
+    /// Title block title.
     pub title: String,
+    /// Title block date.
     pub date: String,
+    /// Revision string.
     pub revision: String,
+    /// Company field.
     pub company: String,
+    /// Non-empty comment fields.
     pub comments: Vec<String>,
 }
 

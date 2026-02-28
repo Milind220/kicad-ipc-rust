@@ -1,20 +1,82 @@
-//! Async-first Rust bindings for the KiCad IPC API.
+//! # KiCad IPC RS
 //!
-//! Layering:
+//! **Async-first, pure-Rust IPC bindings for KiCad's official API.**
+//! Production-focused Rust API surface, typed models, and a blocking wrapper for sync callers.
+//!
+//! ## Why this crate?
+//!
+//! | Capability | `kicad-ipc-rs` | Official Python bindings (`kicad-python`) | Official Rust bindings (`kicad-rs`) |
+//! | --- | --- | --- | --- |
+//! | Rust-native client API | ✅ Yes | ❌ Python package | ⚠️ Development preview |
+//! | Async-first API design | ✅ `KiCadClient` | ⚠️ App-managed event-loop model | ⚠️ Development preview |
+//! | Blocking support for sync apps | ✅ `feature = "blocking"` | ✅ Native Python sync usage | ⚠️ Development preview |
+//! | Wrapped KiCad command coverage (current proto snapshot) | ✅ 56/56 command wrappers | Unknown | Unknown |
+//! | Maintainer focus | ✅ This crate is actively maintained for Rust users | ✅ Official KiCad Python package | ⚠️ Preview status |
+//!
+//! Evidence and references:
+//! - `kicad-python` package: <https://gitlab.com/kicad/code/kicad-python>
+//! - `kicad-rs` package (states "development preview with no docs yet"): <https://gitlab.com/kicad/code/kicad-rs>
+//! - Coverage matrix and runtime notes: <https://github.com/Milind220/kicad-ipc-rs#kicad-v10-rc11-api-completion-matrix>
+//!
+//! ## Quickstart (async)
+//!
+//! ```no_run
+//! use kicad_ipc_rs::KiCadClient;
+//!
+//! #[tokio::main(flavor = "current_thread")]
+//! async fn main() -> Result<(), kicad_ipc_rs::KiCadError> {
+//!     let client = KiCadClient::connect().await?;
+//!     client.ping().await?;
+//!     let version = client.get_version().await?;
+//!     println!("KiCad: {}", version.full_version);
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ## Quickstart (blocking)
+//!
+//! ```no_run
+//! # #[cfg(feature = "blocking")]
+//! # fn run() -> Result<(), kicad_ipc_rs::KiCadError> {
+//! use kicad_ipc_rs::KiCadClientBlocking;
+//! let client = KiCadClientBlocking::connect()?;
+//! let version = client.get_version()?;
+//! println!("KiCad: {}", version.full_version);
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Architecture layers:
 //! - transport
 //! - envelope
 //! - command builders
 //! - high-level client
 
+#![warn(missing_docs)]
+
+/// High-level async client and request/response convenience methods.
 pub mod client;
+/// Low-level command payload builders.
+///
+/// This module is public for advanced integrations and debugging, but most users
+/// should prefer [`crate::client::KiCadClient`] methods.
 pub mod commands;
+/// Envelope helpers for command/response packing and unpacking.
+///
+/// This is primarily an advanced/internal surface.
 pub mod envelope;
+/// Error types returned by this crate.
 pub mod error;
 mod kicad_api_version;
+/// Stable data models used by typed client APIs.
 pub mod model;
+/// IPC transport implementation details.
+///
+/// Most applications should not need to use this module directly.
 pub mod transport;
 
 #[cfg(feature = "blocking")]
+/// Blocking wrapper over the async client.
 pub mod blocking;
 
 pub(crate) mod proto;

@@ -226,3 +226,9 @@ Legend:
 - Expand runtime + integration testing coverage.
 - Set up CI to run checks/tests on commits and PRs.
 - Continue API hardening/docs/examples for stable `1.0` path.
+
+## Future Work: Public Surface + Docs
+
+- This crate is still in alpha, and some lower-level modules currently remain public for advanced/debugging workflows.
+- `#![warn(missing_docs)]` is enabled; high-impact user APIs are documented first, and remaining warnings are being burned down incrementally.
+- As usage data accumulates, internal surfaces (`commands`, `envelope`, transport/proto-adjacent helpers) may be narrowed or made `pub(crate)` where possible without breaking user workflows.
